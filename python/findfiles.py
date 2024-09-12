@@ -14,9 +14,19 @@ import cinit
 # pylint: disable-next=wrong-import-order
 import ascmini
 
-for n in ascmini.posix.find_files('e:/site/skywind3000.github.io', '*.png', True):
-    with open(n, 'rb') as fp:
-        head = fp.read(2)
-        if head == b'BM':
-            print('bmp file:', n)
+def test1():
+    for n in ascmini.posix.find_files('e:/site/skywind3000.github.io', '*.png', True):
+        with open(n, 'rb') as fp:
+            head = fp.read(2)
+            if head == b'BM':
+                print('bmp file:', n)
+    return 0
+
+def test2():
+    for n in ascmini.posix.find_files('e:/site/images', '*.jpg', True):
+        print(n)
+    return 0
+
+test2()
+
 
