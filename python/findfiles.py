@@ -10,9 +10,10 @@
 #======================================================================
 import sys
 import os
-import cinit
+import pathset
 # pylint: disable-next=wrong-import-order
 import ascmini
+import cinit
 
 def test1():
     for n in ascmini.posix.find_files('e:/site/skywind3000.github.io', '*.png', True):
