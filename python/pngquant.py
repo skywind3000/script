@@ -32,8 +32,9 @@ def pngquant(dirname):
 #----------------------------------------------------------------------
 if __name__ == '__main__':
     def test1():
-        # pngquant('E:/site/images/p')
-        pngquant('E:/site/skywind3000.github.io/word/images')
+        # pngquant('E:/site/images/p/tcz_cd')
+        # pngquant('E:/site/skywind3000.github.io/word/images')
         return 0
     test1()
+
 

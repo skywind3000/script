@@ -1,0 +1,22 @@
+#! /usr/bin/env python
+# -*- coding: utf-8 -*-
+#======================================================================
+#
+# findfiles.py - 
+#
+# Created by skywind on 2024/09/12
+# Last Modified: 2024/09/12 10:20:24
+#
+#======================================================================
+import sys
+import os
+import cinit
+# pylint: disable-next=wrong-import-order
+import ascmini
+
+for n in ascmini.posix.find_files('e:/site/skywind3000.github.io', '*.png', True):
+    with open(n, 'rb') as fp:
+        head = fp.read(2)
+        if head == b'BM':
+            print('bmp file:', n)
+
