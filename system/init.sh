@@ -9,8 +9,8 @@
 #======================================================================
 
 # change directory to script home
-cd "$(dirname $0)"
-INIT_HOME="$(pwd)"
+cd "$(/bin/dirname $0)"
+INIT_HOME="$(/bin/pwd)"
 
 # eval each file inside "init" folder
 if [ -d "$INIT_HOME/init" ]; then
