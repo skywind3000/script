@@ -18,5 +18,7 @@ fi
 
 # update files
 cat "$SOURCE/system/init.sh" > "$INSTALL/init.sh"
-cp "$SOURCE/system/*" "$INSTALL/"
+chmod 755 "$INSTALL/init.sh"
+cp $SOURCE/system/* "$INSTALL/lib/"
+
 
