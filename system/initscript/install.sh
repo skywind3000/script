@@ -1,8 +1,9 @@
 #! /bin/sh
 
 # configuration
-SOURCE="/home/data/script"
+SOURCE="/home/data/script/system/initscript"
 INSTALL="/etc/script"
+TEMPLATE="$SOURCE/template"
 
 # create directory
 if [ ! -d "$INSTALL" ]; then
@@ -17,11 +18,10 @@ fi
 [ -d "$INSTALL/lib" ] || mkdir "$INSTALL/lib"
 
 # update files
-cat "$SOURCE/system/init.sh" > "$INSTALL/init.sh"
+cat "$SOURCE/init.sh" > "$INSTALL/init.sh"
 chmod 755 "$INSTALL/init.sh"
-cp $SOURCE/system/* "$INSTALL/lib/"
+cp $SOURCE/*.sh "$INSTALL/lib/"
 
 # update default init/run files
-[ -d "$SOURCE/system/init" ] && cp $SOURCE/system/init/* $INSTALL/init
-[ -d "$SOURCE/system/run" ] && cp $SOURCE/system/run/* $INSTALL/run
+[ -d "$TEMPLATE" ] && cp -r $TEMPLATE/* "$INSTALL"
 
