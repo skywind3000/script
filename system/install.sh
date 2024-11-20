@@ -21,4 +21,7 @@ cat "$SOURCE/system/init.sh" > "$INSTALL/init.sh"
 chmod 755 "$INSTALL/init.sh"
 cp $SOURCE/system/* "$INSTALL/lib/"
 
+# update default init/run files
+[ -d "$SOURCE/system/init" ] && cp $SOURCE/system/init/* $INSTALL/init
+[ -d "$SOURCE/system/run" ] && cp $SOURCE/system/run/* $INSTALL/run
 
