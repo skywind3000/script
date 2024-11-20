@@ -17,7 +17,7 @@ Clone the repo into `/home/data/script` (required location):
 
 Run installation script:
 
-    sh /home/data/script/initscript/install.sh
+    sh /home/data/script/system/bin/script-install.sh
 
 If `/etc/rc.local` doesn't exist, create the file with following content:
 
@@ -39,7 +39,7 @@ And make sure your `rc.local` file has the execution privilege.
 
 Simply run:
 
-    sh /etc/script/lib/update.sh
+    sh /etc/script/bin/script-update.sh
 
 
 ## Credit
