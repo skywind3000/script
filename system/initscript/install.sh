@@ -16,11 +16,15 @@ fi
 [ -d "$INSTALL/init" ] || mkdir "$INSTALL/init"
 [ -d "$INSTALL/run" ] || mkdir "$INSTALL/run"
 [ -d "$INSTALL/lib" ] || mkdir "$INSTALL/lib"
+[ -d "$INSTALL/bin" ] || mkdir "$INSTALL/bin"
 
 # update files
 cat "$SOURCE/init.sh" > "$INSTALL/init.sh"
 chmod 755 "$INSTALL/init.sh"
 cp $SOURCE/*.sh "$INSTALL/lib/"
+
+# update bin directory
+[ -d "$SOURCE/../bin" ] && cp -r $SOURCE/../bin/* "$INSTALL/bin/"
 
 # update default init/run files
 [ -d "$TEMPLATE" ] && cp -r $TEMPLATE/* "$INSTALL"
