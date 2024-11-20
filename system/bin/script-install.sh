@@ -1,9 +1,8 @@
 #! /bin/sh
 
 # configuration
-SOURCE="/home/data/script/system/initscript"
+SOURCE="/home/data/script/system"
 INSTALL="/etc/script"
-TEMPLATE="$SOURCE/template"
 
 # create directory
 if [ ! -d "$INSTALL" ]; then
@@ -20,13 +19,11 @@ fi
 [ -d "$INSTALL/share" ] || mkdir "$INSTALL/share"
 
 # update files
-cat "$SOURCE/init.sh" > "$INSTALL/init.sh"
-chmod 755 "$INSTALL/init.sh"
-cp $SOURCE/*.sh "$INSTALL/lib/"
+cp -r $SOURCE/template/* "$INSTALL/" 
+chmod 755 "$INSTALL/init.sh" 2> /dev/null
 
-# update bin directory
-[ -d "$SOURCE/../bin" ] && cp -r $SOURCE/../bin/* "$INSTALL/bin/"
+# update bin/lib directory
+[ -d "$SOURCE/bin" ] && cp -r $SOURCE/bin/* "$INSTALL/bin/"
+[ -d "$SOURCE/lib" ] && cp -r $SOURCE/lib/* "$INSTALL/lib/"
 
-# update default init/run files
-[ -d "$TEMPLATE" ] && cp -r $TEMPLATE/* "$INSTALL"
 
