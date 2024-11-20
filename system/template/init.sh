@@ -12,6 +12,9 @@
 cd "$(/bin/dirname $0)"
 INIT_HOME="$(/bin/pwd)"
 
+# print info
+echo "Launching initialization scripts"
+
 # eval each file inside "init" folder
 if [ -d "$INIT_HOME/init" ]; then
 	for f in $INIT_HOME/init/*; do
