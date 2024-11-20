@@ -17,6 +17,7 @@ fi
 [ -d "$INSTALL/run" ] || mkdir "$INSTALL/run"
 [ -d "$INSTALL/lib" ] || mkdir "$INSTALL/lib"
 [ -d "$INSTALL/bin" ] || mkdir "$INSTALL/bin"
+[ -d "$INSTALL/share" ] || mkdir "$INSTALL/share"
 
 # update files
 cat "$SOURCE/init.sh" > "$INSTALL/init.sh"

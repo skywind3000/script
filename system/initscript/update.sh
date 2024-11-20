@@ -9,5 +9,5 @@ cd "$SOURCE"
 git pull
 
 # update files
-sh "$SOURCE/system/install.sh"
+sh "$SOURCE/system/initscript/install.sh"
 
