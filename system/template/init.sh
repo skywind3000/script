@@ -12,7 +12,10 @@
 cd "$(/bin/dirname $0)"
 INIT_HOME="$(/bin/pwd)"
 
-# print info
+# print information: 
+# if this script is started by rc.local, you can see the output/error
+# in /var/log/syslog if rsyslog is installed, or use systemd command:
+# systemctl status rc-local.service
 echo "Launching initialization scripts"
 
 # eval each file inside "init" folder
