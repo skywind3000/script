@@ -46,12 +46,12 @@ Simply run:
 
 Install `rsyslog` and see your logs in `/var/log/syslog`:
 
-    grep rc.local /var/log/syslog
+    sudo grep rc.local /var/log/syslog
 
 or see it with systemd:
 
-    systemctl status rc-local.service
-    journalctl -u rc-local.service
+    sudo systemctl status rc-local.service
+    sudo journalctl -u rc-local.service
 
 Both of above commands can work, choose one.
 
