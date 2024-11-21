@@ -15,7 +15,7 @@ INIT_HOME="$(/bin/pwd)"
 # print information: 
 # if this script is started by rc.local, you can see the output/error
 # in /var/log/syslog if rsyslog is installed, or use systemd command:
-# systemctl status rc-local.service
+# sudo journalctl -u rc-local.service
 echo "Launching initialization scripts"
 
 # eval each file inside "init" folder
