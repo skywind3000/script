@@ -1,7 +1,6 @@
 #! /bin
 network="$1"
 remove="$2"
-mode="-A"
 
 if [ -z "$network" ]; then
 	echo "usage: $0 {network}"
