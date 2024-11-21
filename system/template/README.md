@@ -23,12 +23,13 @@ If `/etc/rc.local` doesn't exist, create the file with following content:
 
     #! /bin/sh
     sh /etc/script/init.sh
+    exit 0
 
 And grant the execution privilege:
 
     chmod 755 /etc/rc.local
 
-If `/etc/rc.local` already exists, add this after the last line:
+If `/etc/rc.local` already exists, add this before the `exit 0` line:
 
     sh /etc/script/init.sh
 
@@ -41,7 +42,20 @@ Simply run:
 
     sh /etc/script/bin/script-update.sh
 
+## Log
+
+Install `rsyslog` and see your logs in `/var/log/syslog`:
+
+    grep rc.local /var/log/syslog
+
+or see it with systemd:
+
+    systemctl status rc-local.service
+    journalctl -u rc-local.service
+
+Both of above commands can work, choose one.
 
 ## Credit
 
 TODO
+
