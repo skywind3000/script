@@ -30,7 +30,7 @@ fi
 if [ -d "$INIT_HOME/run" ]; then
 	for f in $INIT_HOME/run/*; do
 		cd "$INIT_HOME/run"
-		[ -x "$f" ] && "$f"
+		[ -x "$f" ] && "$f" start
 	done
 fi
 
