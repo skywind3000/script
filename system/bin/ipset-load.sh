@@ -13,7 +13,7 @@ if [ ! -e "$FILENAME" ]; then
 	exit 1
 fi
 
-ipset destroy $SETNAME > /dev/null
+ipset destroy $SETNAME 2> /dev/null
 ipset create $SETNAME hash:net hashsize 8192 maxelem 1000000
 
 sed "s:^:add $SETNAME :g" "$2" | ipset restore
