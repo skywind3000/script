@@ -11,8 +11,8 @@
 /etc/script/bin/ipset-load.sh CHINA ../share/cn_rules.txt
 
 # extend cnip set with extra rules if existing
-if [ -e "../share/cn_extra_rules.txt" ]; then
-	/etc/script/bin/ipset-append.sh CHINA ../share/cn_extra_rules.txt
+if [ -e "../share/cn_extra.txt" ]; then
+	/etc/script/bin/ipset-append.sh CHINA ../share/cn_extra.txt
 fi
 
 # enable fwmark
