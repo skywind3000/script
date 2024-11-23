@@ -18,4 +18,3 @@ ipset create $SETNAME hash:net hashsize 8192 maxelem 1000000
 
 sed "s:^:add $SETNAME :g" "$2" | ipset restore
 
-
