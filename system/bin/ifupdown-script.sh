@@ -45,19 +45,28 @@ fi
 
 FN="/etc/script/device/$DEVICE"
 
+APPEND="/etc/script/bin/append-log.sh"
+LOG="ifupdown-script.log"
+UID="$(id -u)"
+
+[ "$UID" -eq 0 ] && LOG="/var/log/$LOG" || LOG="/tmp/$LOG"
+
+echo "Interface $DEVICE $ACTION" | $APPEND "$LOG"
+
 if [ -x "$FN" ]; then
-	IFACE="$DEVICE" "$FN" "$ACTION"
+	IFACE="$DEVICE" "$FN" "$ACTION" 2>&1 | $APPEND "$LOG"
 elif [ -x "$FN.sh" ]; then
-	IFACE="$DEVICE" "$FN.sh" "$ACTION"
+	IFACE="$DEVICE" "$FN.sh" "$ACTION" 2>&1 | $APPEND "$LOG"
 elif [ -x "$FN.bash" ]; then
-	IFACE="$DEVICE" "$FN.bash" "$ACTION"
+	IFACE="$DEVICE" "$FN.bash" "$ACTION" 2>&1 | $APPEND "$LOG"
 elif [ -x "$FN.zsh" ]; then
-	IFACE="$DEVICE" "$FN.zsh" "$ACTION"
+	IFACE="$DEVICE" "$FN.zsh" "$ACTION" 2>&1 | $APPEND "$LOG"
 elif [ -x "$FN.py" ]; then
-	IFACE="$DEVICE" "$FN.py" "$ACTION"
+	IFACE="$DEVICE" "$FN.py" "$ACTION" 2>&1 | $APPEND "$LOG"
 elif [ -x "$FN.lua" ]; then
-	IFACE="$DEVICE" "$FN.lua" "$ACTION"
+	IFACE="$DEVICE" "$FN.lua" "$ACTION" 2>&1 | $APPEND "$LOG"
 fi
 
 exit 0
+
 
