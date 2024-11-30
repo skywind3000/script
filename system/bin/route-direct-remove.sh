@@ -1,7 +1,7 @@
 #! /bin/sh
 #======================================================================
 #
-# route-direct-install.sh - 
+# route-direct-remove.sh - 
 #
 # Created by skywind on 2024/12/01
 # Last Modified: 2024/12/01 01:56:35
@@ -22,14 +22,14 @@ fi
 
 
 # vpn server use default gateway
-ip route add table 200 $VPN_SERVER via $GATEWAY dev $DEVICE
-ip rule add prio 100 lookup 200
+ip route del table 200 $VPN_SERVER via $GATEWAY dev $DEVICE
+ip rule del prio 100 lookup 200
 
 # direct link use default gateway
-ip rule add prio 101 fwmark 700 lookup main
+ip rule del prio 101 fwmark 700 lookup main
 
 # passwall link use vpn gateway
-ip route add table 201 default via $VPN_GATEWAY dev $VPN_DEVICE
-ip rule add prio 102 fwmark 701 lookup 201
+ip route del table 201 default via $VPN_GATEWAY dev $VPN_DEVICE
+ip rule del prio 102 fwmark 701 lookup 201
 
 
