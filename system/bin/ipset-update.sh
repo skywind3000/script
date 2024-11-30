@@ -15,5 +15,5 @@ fi
 
 ipset flush $SETNAME
 
-sed "s:^:add $SETNAME :g" "$2" | ipset restore
+sed '/^[[:space:]]*$/d' "$2" | sed "s:^:add $SETNAME :g" | ipset restore
 

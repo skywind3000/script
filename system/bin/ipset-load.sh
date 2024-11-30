@@ -16,5 +16,5 @@ fi
 ipset destroy $SETNAME 2> /dev/null
 ipset create $SETNAME hash:net hashsize 8192 maxelem 1000000
 
-sed "s:^:add $SETNAME :g" "$2" | ipset restore
+sed '/^[[:space:]]*$/d' "$2" | sed "s:^:add $SETNAME :g" | ipset restore
 

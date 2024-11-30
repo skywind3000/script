@@ -1,7 +1,7 @@
 #! /bin/sh
 #======================================================================
 #
-# 20-ipset-passwall.sh - 
+# 20-ipset-direct.sh - 
 #
 # Created by skywind on 2024/12/01
 # Last Modified: 2024/12/01 00:44:01
