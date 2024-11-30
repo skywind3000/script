@@ -14,7 +14,8 @@
 #
 #     /etc/script/device/$IFACE {up|down|preup|postdown}
 #
-# each time when a network interface status is changed
+# each time when a network interface status is changed.
+# Make sure you have "network-manager" installed by "apt-get".
 #
 #======================================================================
 DEVICE="$1"
