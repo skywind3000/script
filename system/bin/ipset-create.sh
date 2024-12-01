@@ -8,5 +8,5 @@ if [ -z "$SETNAME" ]; then
 fi
 
 ipset destroy $SETNAME 2> /dev/null
-ipset create $SETNAME hash:net hashsize 8192 maxelem 1000000
+ipset create $SETNAME hash:net hashsize 131072 maxelem 1000000
 
