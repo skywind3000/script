@@ -19,6 +19,6 @@ fi
 sysctl -w net.ipv4.conf.all.src_valid_mark=1
 
 # iptable set mark 666 for ipset CHINA
-/etc/script/bin/iptables-mark-set.sh CHINA 666
+/etc/script/bin/iptables-ipset-mark.sh CHINA 666
 
 

@@ -36,9 +36,9 @@ fi
 sysctl -w net.ipv4.conf.all.src_valid_mark=1
 
 # iptable set mark 700 for ipset DIRECT
-/etc/script/bin/iptables-mark-set.sh DIRECT 700
+/etc/script/bin/iptables-ipset-mark.sh DIRECT 700
 
 # iptable set mark 701 for ipset PASSWALL
-/etc/script/bin/iptables-mark-set.sh PASSWALL 701
+/etc/script/bin/iptables-ipset-mark.sh PASSWALL 701
 
 
