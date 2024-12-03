@@ -13,5 +13,5 @@ if [ ! -e "$FILENAME" ]; then
 	exit 1
 fi
 
-sed '/^[[:space:]]*$/d' "$2" | sed "s:^:add $SETNAME :g" | ipset restore
+sed '/^[[:space:]]*$/d' "$2" | sed "s:^:add $SETNAME :g" | ipset -! restore
 
