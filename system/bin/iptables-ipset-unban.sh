@@ -16,4 +16,6 @@ fi
 
 iptables -D INPUT -m set --match-set "$SETNAME" src -j DROP
 
+# iptables -D PREROUTING -t raw -m set --match-set "$SETNAME" src -j DROP
+
 

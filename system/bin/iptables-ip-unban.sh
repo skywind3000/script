@@ -16,4 +16,6 @@ fi
 
 iptables -D INPUT -s $IP -j DROP
 
+# iptables -D PREROUTING -t raw -s $IP -j DROP
+
 
