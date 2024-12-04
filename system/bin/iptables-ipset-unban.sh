@@ -15,7 +15,6 @@ if [ -z "$SETNAME" ]; then
 fi
 
 iptables -D INPUT -m set --match-set "$SETNAME" src -j DROP
-
-# iptables -D PREROUTING -t raw -m set --match-set "$SETNAME" src -j DROP
+iptables -D FORWARD -m set --match-set "$SETNAME" src -j DROP
 
 
