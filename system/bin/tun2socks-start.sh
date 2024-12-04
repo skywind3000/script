@@ -66,14 +66,17 @@ if [ "$CODE" -ne 0 ]; then
 fi
 
 _tun2socks_terminate() {
+	SIG=$(($? - 128))
+	echo "received signal: $SIG"
 	if [ $CPID -ne 0 ]; then
+		echo "terminate child"
 		kill $CPID 2> /dev/null
 	fi
 }
 
 trap "_tun2socks_terminate" INT TERM TSTP QUIT EXIT
 
-echo "Starting tun2socks"
+echo "Starting tun2socks (script $$):"
 
 echo "Exec: $BINARY" --device "$DEVICE" "$@"
 
