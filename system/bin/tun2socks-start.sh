@@ -57,6 +57,7 @@ fi
 ip link set dev $DEVICE up
 
 CODE="$?"
+CPID=0
 
 if [ "$CODE" -ne 0 ]; then
 	echo "Failed to bring up $DEVICE"
@@ -64,13 +65,25 @@ if [ "$CODE" -ne 0 ]; then
 	exit 4
 fi
 
-trap "" INT TERM TSTP QUIT EXIT
+_tun2socks_terminate() {
+	if [ $CPID -ne 0 ]; then
+		kill $CPID 2> /dev/null
+	fi
+}
+
+trap "_tun2socks_terminate" INT TERM TSTP QUIT EXIT
 
 echo "Starting tun2socks"
 
 echo "Exec: $BINARY" --device "$DEVICE" "$@"
 
-"$BINARY" --device "$DEVICE" "$@"
+"$BINARY" --device "$DEVICE" "$@" &
+
+CPID=$!
+
+wait $CPID
+
+CPID=0
 
 echo "tun2socks quit"
 
