@@ -1,4 +1,13 @@
-#! /usr/bin/python3
+#! /usr/bin/env python3
+# -*- coding: utf-8 -*-
+#======================================================================
+#
+# cidr_merge.py - 
+#
+# Also see https://github.com/zhanhb/cidr-merger
+# Last Modified: 2024/12/05 09:49:27
+#
+#======================================================================
 import sys
 import os
 import netaddr
