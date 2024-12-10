@@ -31,7 +31,7 @@ ip rule add prio 101 fwmark 700 lookup main
 
 # vpn sub network
 if [ -n "$VPN_SUBNET" ]; then
-	ip route add table 201 $VPN_SUBNET dev $VPN_DEVICE
+	ip route add $VPN_SUBNET dev $VPN_DEVICE
 fi
 
 # passwall link use vpn gateway
