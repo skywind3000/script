@@ -12,9 +12,9 @@ fi
 
 cat "$NAME" | grep 'ipv4' | grep 'CN' | \
 	awk -F '|' '{print $4 "/" 32-log($5)/log(2)}'  | \
-	python3 /home/data/script/system/utils/cidr_merge.py > "cn-$NAME"
+	python3 /etc/script/lib/cidr_merge.py > "cn-$NAME"
 
 cat "$NAME" | grep 'ipv4' | grep -v 'CN' | grep -v '*' | \
 	awk -F '|' '{print $4 "/" 32-log($5)/log(2)}' | \
-	python3 /home/data/script/system/utils/cidr_merge.py > "en-$NAME"
+	python3 /etc/script/lib/cidr_merge.py > "en-$NAME"
 
