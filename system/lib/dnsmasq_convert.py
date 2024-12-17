@@ -34,6 +34,8 @@ for line in open(filename):
     line = line.strip('\r\n\t ')
     if not line:
         continue
+    if line.startswith('#'):
+        continue
     print('server=/%s/%s'%(line, server))
     if ipset:
         print('ipset=/%s/%s'%(line, ipset))
