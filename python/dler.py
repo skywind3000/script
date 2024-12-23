@@ -104,11 +104,11 @@ class ProxyInfo (object):
 
     def __generate_ss (self):
         output = []
-        return '\n'.join(output)
+        return '\n'.join(output).strip('\r\n\t ')
 
     def __generate_trojan (self):
         output = []
-        return '\n'.join(output)
+        return '\n'.join(output).strip('\r\n\t ')
 
 
 #----------------------------------------------------------------------
