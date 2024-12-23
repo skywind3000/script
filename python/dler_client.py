@@ -11,6 +11,8 @@
 import sys
 import os
 import re
+import urllib.parse
+import base64
 import cinit
 import ascmini
 
@@ -26,7 +28,7 @@ url_rules = r'''
     host = [^:/@\r\n\t ]+
     port = \d+
     optional_port = (?:[:]{port})?
-    path = /[^\r\n\t ]*
+    path = [\/\?][^\r\n\t ]*
     url = {protocol}://({login}[@])?{host}{optional_port}{path}?
 '''
 
@@ -45,6 +47,7 @@ class ProxyInfo (object):
         self.host = None
         self.port = 0
         self.password = None
+        self.cipher = ''
         self.parse(url)
 
     def parse (self, url):
@@ -60,7 +63,25 @@ class ProxyInfo (object):
         s = re.match(pattern, self.url)
         d = s.groupdict()
         self.host = s.group('host').strip('\r\n\t ')
-        self.port = int(d.get('port', 8080))
+        self.port = d.get('port', '8080')
+        self.password = d.get('login', '')
+        if self.mode == 'ss':
+            t = self.password
+            t = base64.b64decode(t).decode('utf-8', 'ignore')
+            p1, _, p2 = t.partition(':')
+            self.cipher = p1.strip('\r\n\t ')
+            self.password = p2.strip('\r\n\t ')
+        path = d.get('path', '')
+        path = path.lstrip('/?')
+        vars, _, anchor = path.partition('#')
+        vars = vars.strip('\r\n\t ')
+        anchor = anchor.strip('\r\n\t ')
+        objs = urllib.parse.parse_qs(vars)
+        name = urllib.parse.unquote(anchor)
+        print(objs)
+        print(name)
+        print(self.password)
+        print(self.cipher)
         # print(s.groups())
         return 0
 
@@ -142,7 +163,9 @@ if __name__ == '__main__':
         c2 = dler[1].strip('\r\n\t ')
         print(c1)
         print(c2)
+        print()
         p1 = ProxyInfo(c1)
+        print()
         p2 = ProxyInfo(c2)
         return 0
     test2()
