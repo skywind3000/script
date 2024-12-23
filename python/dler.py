@@ -78,12 +78,37 @@ class ProxyInfo (object):
         anchor = anchor.strip('\r\n\t ')
         self.objs = urllib.parse.parse_qs(vars)
         self.name = urllib.parse.unquote(anchor).strip('\r\n\t ')
-        print(self.objs)
-        print(self.name)
-        print(self.password)
-        print(self.cipher)
-        # print(s.groups())
+        if self.mode == 'ss':
+            self.__parse_ss()
         return 0
+
+    def __parse_ss (self):
+        objs = self.objs
+        plugin = objs.get('plugin', None)
+        self.plugin = None
+        if plugin:
+            info = plugin[0]
+            mark = 'obfs-local;'
+            if info.startswith(mark):
+                self.plugin = {}
+                self.plugin['name'] = 'obfs-local'
+                self.plugin['opts'] = info[len(mark):].strip('\r\n\t ')
+        return 0
+
+    def generate (self):
+        if self.mode == 'ss':
+            return self.__generate_ss()
+        if self.mode == 'trojan':
+            return self.__generate_trojan()
+        return None
+
+    def __generate_ss (self):
+        output = []
+        return '\n'.join(output)
+
+    def __generate_trojan (self):
+        output = []
+        return '\n'.join(output)
 
 
 #----------------------------------------------------------------------
