@@ -10,11 +10,6 @@
 #======================================================================
 import sys
 import os
-
-DIRNAME = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(os.path.normpath(os.path.join(DIRNAME, '../../vim/lib')))
-
-# pylint: disable-next=wrong-import-position
 import ascmini   # noqa: E402
 
 
