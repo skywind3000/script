@@ -104,9 +104,71 @@ def build(code, macros = None, capture = True):
 
 
 #----------------------------------------------------------------------
+# tokenize
+#----------------------------------------------------------------------
+def tokenize(code, specs, eof = None):
+    patterns = []
+    definition = {}
+    extended = {}
+    if not specs:
+        return None
+    for index in range(len(specs)):
+        spec = specs[index]
+        name, pattern = spec[:2]
+        pn = 'PATTERN%d'%index
+        definition[pn] = name
+        if len(spec) >= 3:
+            extended[pn] = spec[2]
+        patterns.append((pn, pattern))
+    tok_regex = '|'.join('(?P<%s>%s)' % pair for pair in patterns)
+    line_starts = []
+    pos = 0
+    index = 0
+    while 1:
+        line_starts.append(pos)
+        pos = code.find('\n', pos)
+        if pos < 0:
+            break
+        pos += 1
+    line_num = 0
+    for mo in re.finditer(tok_regex, code):
+        kind = mo.lastgroup
+        value = mo.group()
+        start = mo.start()
+        while line_num < len(line_starts) - 1:
+            if line_starts[line_num + 1] > start:
+                break
+            line_num += 1
+        line_start = line_starts[line_num]
+        name = definition[kind]
+        if name is None:
+            continue
+        if callable(name):
+            if kind not in extended:
+                obj = name(value)
+            else:
+                obj = name(value, extended[kind])
+            name = None
+            if isinstance(obj, list) or isinstance(obj, tuple):
+                if len(obj) > 0: 
+                    name = obj[0]
+                if len(obj) > 1:
+                    value = obj[1]
+            else:
+                name = obj
+        yield (name, value, line_num + 1, start - line_start + 1)
+    if eof is not None:
+        line_start = line_starts[-1]
+        endpos = len(code)
+        yield (eof, '', len(line_starts), endpos - line_start + 1)
+    return 0
+
+
+#----------------------------------------------------------------------
 # testing suit
 #----------------------------------------------------------------------
 if __name__ == '__main__':
+
     def test1():
         rules = r'''
             protocol = http|https|trojan|ss
@@ -124,9 +186,36 @@ if __name__ == '__main__':
         s = re.match(pattern, 'https://name:pass@www.baidu.com:8080/haha')
         print('matched: "%s"'%s.group(0))
         print()
-        for name in ('url', 'login_name', 'login_pass', 'host', 'port', 'path'):
+        for name in ('login_name', 'login_pass', 'host', 'port', 'path'):
             print('subgroup:', name, '=', s.group(name))
         return 0
-    test1()
+
+    def test2():
+        code = '''
+            IF quantity THEN
+                total := total + price * quantity;
+                tax := price * 0.05;
+            ENDIF;
+            '''
+        keywords = {'IF', 'THEN', 'ENDIF', 'FOR', 'NEXT', 'GOSUB', 'RETURN'}
+        def check_name(text):
+            if text.upper() in keywords:
+                return text.upper()
+            return 'NAME'
+        rules = [
+                (None,       r'[ \t]+'),
+                ('NUMBER',   r'\d+(\.\d*)?'),
+                ('ASSIGN',   r':='),
+                ('END',      r';'),
+                (check_name, r'[A-Za-z]+'),
+                ('OP',       r'[+\-*/]'),
+                ('NEWLINE',  r'\n'),
+                ('MISMATCH', r'.'),
+                ]
+        for token in tokenize(code, rules, None):
+            print(token)
+        return 0
+
+    test2()
 
 
