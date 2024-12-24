@@ -124,6 +124,42 @@ class ProxyInfo (object):
 
     def __generate_trojan (self):
         objs = {}
+        objs['run_type'] = 'client'
+        objs['local_addr'] = '{{LOCAL_ADDRESS}}'
+        objs['local_port'] = '{{LOCAL_PORT}}'
+        objs['remote_addr'] = self.host
+        objs['remote_port'] = int(self.port)
+        objs['password'] = [self.password]
+        objs['log_level'] = 1
+        c = 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256'
+        c += ':ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305'
+        c += ':ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384'
+        c += ':ECDHE-ECDSA-AES256-SHA:ECDHE-ECDSA-AES128-SHA'
+        c += ':ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA'
+        c += ':DHE-RSA-AES256-SHA:AES128-SHA:AES256-SHA:DES-CBC3-SHA'
+        c += ':TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384'
+        c += ':TLS_CHACHA20_POLY1305_SHA256'
+        t = 'TLS_AES_128_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256'
+        t += ':TLS_AES_256_GCM_SHA384'
+        objs['ssl'] = {
+            'verify': False,
+            'verify_hostname': False,
+            'cert': '',
+            'cipher': c,
+            'cipher_tls13': t,
+            'sni': '',
+            'alpn': ['h2', 'http/1.1'],
+            'reuse_session': True,
+            'session_ticket': False,
+            'curves': '',
+        }
+        objs['tcp'] = {
+            'no_delay': True,
+            'keep_alive': True,
+            'reuse_port': True,
+            'fast_open': False,
+            'fast_open_qlen': 20,
+        }
         text = json.dumps(objs, indent = 4)
         return text
 
