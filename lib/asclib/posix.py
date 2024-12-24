@@ -390,6 +390,30 @@ def save_file_text_atomic(filename, content, encoding = None):
 
 
 #----------------------------------------------------------------------
+# copy file tree
+#----------------------------------------------------------------------
+def xcopytree(src, dst, override = False):
+    import shutil
+    if not os.path.exists(src):
+        return -1
+    if os.path.exists(dst) and (not override):
+        for root, dirs, files in os.walk(src):
+            for file in files:
+                srcname = os.path.join(root, file)
+                relname = os.path.relpath(root, src)
+                dstname = os.path.join(dst, relname, file)
+                if not os.path.exists(dstname):
+                    dirname = os.path.dirname(dstname)
+                    if not os.path.exists(dirname):
+                        os.makedirs(dirname, exist_ok = True)
+                    shutil.copy2(srcname, dstname)
+    else:
+        os.makedirs(dst, exist_ok = True)
+        shutil.copytree(src, dst, dirs_exist_ok = True)
+    return 0
+
+
+#----------------------------------------------------------------------
 # testing suit
 #----------------------------------------------------------------------
 if __name__ == '__main__':

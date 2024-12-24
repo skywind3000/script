@@ -245,3 +245,103 @@ def callstack ():
     return sio.getvalue()
 
 
+#----------------------------------------------------------------------
+# tabulify: style = 0, 1, 2
+#----------------------------------------------------------------------
+def tabulify(rows, style = 0):
+    colsize = {}
+    maxcol = 0
+    output = []
+    if not rows:
+        return ''
+    for row in rows:
+        maxcol = max(len(row), maxcol)
+        for col, text in enumerate(row):
+            text = str(text)
+            size = len(text)
+            if col not in colsize:
+                colsize[col] = size
+            else:
+                colsize[col] = max(size, colsize[col])
+    if maxcol <= 0:
+        return ''
+    def gettext(row, col):
+        csize = colsize[col]
+        if row >= len(rows):
+            return ' ' * (csize + 2)
+        row = rows[row]
+        if col >= len(row):
+            return ' ' * (csize + 2)
+        text = str(row[col])
+        padding = 2 + csize - len(text)
+        pad1 = 1
+        pad2 = padding - pad1
+        return (' ' * pad1) + text + (' ' * pad2)
+    if style == 0:
+        for y, row in enumerate(rows):
+            line = ''.join([ gettext(y, x) for x in range(maxcol) ])
+            output.append(line)
+    elif style == 1:
+        if rows:
+            newrows = rows[:1]
+            head = [ '-' * colsize[i] for i in range(maxcol) ]
+            newrows.append(head)
+            newrows.extend(rows[1:])
+            rows = newrows
+        for y, row in enumerate(rows):
+            line = ''.join([ gettext(y, x) for x in range(maxcol) ])
+            output.append(line)
+    elif style == 2:
+        sep = '+'.join([ '-' * (colsize[x] + 2) for x in range(maxcol) ])
+        sep = '+' + sep + '+'
+        for y, row in enumerate(rows):
+            output.append(sep)
+            line = '|'.join([ gettext(y, x) for x in range(maxcol) ])
+            output.append('|' + line + '|')
+        output.append(sep)
+    return '\n'.join(output)
+
+
+#----------------------------------------------------------------------
+# hexdump
+#----------------------------------------------------------------------
+def hexdump(data, char = False):
+    content = ''
+    charset = ''
+    lines = []
+    if isinstance(data, str):
+        if sys.version_info[0] >= 3:
+            data = data.encode('utf-8', 'ignore')
+    if not isinstance(data, bytes):
+        raise ValueError('data must be bytes')
+    for i, _ in enumerate(data):
+        if sys.version_info[0] < 3:
+            ascii = ord(data[i])
+        else:
+            ascii = data[i]
+        if i % 16 == 0: content += '%08X  '%i
+        content += '%02X'%ascii
+        content += ((i & 15) == 7) and '-' or ' '
+        # pylint: disable-next=chained-comparison
+        if (ascii >= 0x20) and (ascii < 0x7f): charset += chr(ascii)
+        else: charset += '.'
+        if (i % 16 == 15): 
+            lines.append(content + ' ' + charset)
+            content, charset = '', ''
+    if len(content) < 60: content += ' ' * (58 - len(content))
+    lines.append(content + ' ' + charset)
+    limit = char and 104 or 58
+    return '\n'.join([ n[:limit] for n in lines ])
+
+
+#----------------------------------------------------------------------
+# testing suit
+#----------------------------------------------------------------------
+if __name__ == '__main__':
+    def test1():
+        print('callstack:')
+        print(callstack())
+        return 0
+    test1()
+
+
