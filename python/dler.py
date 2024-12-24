@@ -51,6 +51,12 @@ class ProxyInfo (object):
         self.cipher = ''
         self.parse(url)
 
+    def __repr__ (self):
+        return 'ProxyInfo(%s)' % repr(self.url)
+
+    def __str__ (self):
+        return '<ProxyInfo:%s>' % self.name
+
     def parse (self, url):
         self.url = url.strip('\r\n\t ')
         if url.startswith('trojan://'):
@@ -179,7 +185,7 @@ class configure (object):
         self.cache = os.path.expanduser('~/.cache/dler.txt')
         if not os.path.exists(os.path.dirname(self.cache)):
             os.makedirs(os.path.dirname(self.cache))
-        self.items = ''
+        self.items = []
         self.head = {}
         self.reload()
 
@@ -205,6 +211,7 @@ class configure (object):
             return -1
         self.data = ascmini.posix.load_file_text(self.cache)
         self.head = {}
+        self.items = []
         for line in self.data.split('\n'):
             line = line.strip('\r\n\t ')
             if not line:
@@ -220,9 +227,11 @@ class configure (object):
                 status = status.strip('\r\n\t ')
                 self.head['status'] = status
             if line.startswith('trojan://'):
-                pass
+                p = ProxyInfo(line)
+                self.items.append(p)
             elif line.startswith('ss://'):
-                pass
+                p = ProxyInfo(line)
+                self.items.append(p)
         return 0
 
 
@@ -233,7 +242,11 @@ if __name__ == '__main__':
     def test1():
         c = configure()
         # c.update()
-        print(c.data)
+        # print(c.data)
+        c.reload()
+        for p in c.items:
+            print(p)
+        print(len(c.items))
         return 0
     def test2():
         dler = ascmini.posix.load_file_text('/home/skywind/scratch/dler.txt').split('\n')
@@ -248,6 +261,6 @@ if __name__ == '__main__':
         p2 = ProxyInfo(c2)
         print(p2.generate())
         return 0
-    test2()
+    test1()
 
 
