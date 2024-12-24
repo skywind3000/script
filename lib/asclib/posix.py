@@ -51,8 +51,10 @@ def rmtree(path, ignore_error = False, onerror = None):
     return True
 
 
+#----------------------------------------------------------------------
 # absolute path
-def abspath (self, path, resolve = False):
+#----------------------------------------------------------------------
+def abspath(path, resolve = False):
     if path is None:
         return None
     if '~' in path:
