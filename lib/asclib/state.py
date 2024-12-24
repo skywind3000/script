@@ -57,6 +57,14 @@ def load_ini(filename, encoding = None):
 
 
 #----------------------------------------------------------------------
+# save ini text
+#----------------------------------------------------------------------
+def __safe_ini_text(text):
+    text = text.strip('\r\n\t ').replace('\n', '').replace('\r', '')
+    return text.replace('=', '')
+
+
+#----------------------------------------------------------------------
 # save ini 
 #----------------------------------------------------------------------
 def save_ini(filename, config, atomic = False):
@@ -68,10 +76,11 @@ def save_ini(filename, config, atomic = False):
     for sectname in sectnames:
         if sectname not in config:
             continue
-        sectname = sectname.strip('\r\n\t ')
-        output.append('[%s]' % sectname)
+        output.append('[%s]' % __safe_ini_text(sectname))
         for key in config[sectname]:
             val = config[sectname][key]
+            key = __safe_ini_text(key)
+            val = __safe_ini_text(val)
             output.append('%s=%s' % (key, val))
         output.append('')
     text = '\n'.join(output)
