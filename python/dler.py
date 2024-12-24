@@ -13,6 +13,7 @@ import os
 import re
 import urllib.parse
 import base64
+import json
 import cinit
 import ascmini
 
@@ -71,6 +72,7 @@ class ProxyInfo (object):
             p1, _, p2 = t.partition(':')
             self.cipher = p1.strip('\r\n\t ')
             self.password = p2.strip('\r\n\t ')
+            self.cipher = self.cipher or 'aes-256-cfb'
         path = d.get('path', '')
         path = path.lstrip('/?')
         vars, _, anchor = path.partition('#')
@@ -103,12 +105,27 @@ class ProxyInfo (object):
         return None
 
     def __generate_ss (self):
-        output = []
-        return '\n'.join(output).strip('\r\n\t ')
+        objs = {}
+        objs['server'] = self.host
+        objs['server_port'] = int(self.port)
+        objs['local_address'] = '{{LOCAL_ADDRESS}}'
+        objs['local_port'] = '{{LOCAL_PORT}}'
+        objs['password'] = self.password
+        objs['method'] = self.cipher
+        if self.plugin:
+            objs['plugin'] = self.plugin['name']
+            objs['plugin_opts'] = self.plugin['opts']
+        objs['mode'] = 'tcp_and_udp'
+        objs['timeout'] = 60
+        objs['fast_open'] = False
+        objs['reuse_port'] = True
+        text = json.dumps(objs, indent = 4)
+        return text
 
     def __generate_trojan (self):
-        output = []
-        return '\n'.join(output).strip('\r\n\t ')
+        objs = {}
+        text = json.dumps(objs, indent = 4)
+        return text
 
 
 #----------------------------------------------------------------------
@@ -190,8 +207,10 @@ if __name__ == '__main__':
         print(c2)
         print()
         p1 = ProxyInfo(c1)
+        print(p1.generate())
         print()
         p2 = ProxyInfo(c2)
+        print(p2.generate())
         return 0
     test2()
 
