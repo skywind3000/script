@@ -189,6 +189,15 @@ class configure (object):
         self.head = {}
         self.reload()
 
+    def __len__ (self):
+        return len(self.items)
+
+    def __getitem__ (self, index):
+        return self.items[index]
+
+    def __iter__ (self):
+        return self.items.__iter__()
+
     def update (self):
         if not self.source:
             print('source url not set')
