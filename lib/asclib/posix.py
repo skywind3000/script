@@ -68,6 +68,23 @@ def abspath(path, resolve = False):
 
 
 #----------------------------------------------------------------------
+# which file
+#----------------------------------------------------------------------
+def which(name, prefix = None, postfix = None):
+    if not prefix:
+        prefix = []
+    if not postfix:
+        postfix = []
+    PATH = os.environ.get('PATH', '').split(UNIX and ':' or ';')
+    search = prefix + PATH + postfix
+    for path in search:
+        fullname = os.path.join(path, name)
+        if os.path.exists(fullname):
+            return fullname
+    return None
+
+
+#----------------------------------------------------------------------
 # load content
 #----------------------------------------------------------------------
 def load_file_content(filename, mode = 'r'):
@@ -239,6 +256,7 @@ if __name__ == '__main__':
     def test1():
         content = load_file_content(__file__)
         print(content)
+        print(which('gcc'))
         return 0
     test1()
 
