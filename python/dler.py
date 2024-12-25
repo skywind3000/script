@@ -16,6 +16,8 @@ import base64
 import json
 import cinit
 import ascmini
+import asclib
+import asclib.regex
 
 
 #----------------------------------------------------------------------
@@ -33,7 +35,7 @@ url_rules = r'''
     url = {protocol}://({login}[@])?{host}{optional_port}{path}?
 '''
 
-url_regex = ascmini.regex_build(url_rules)
+url_regex = asclib.regex.build(url_rules)
 
 
 #----------------------------------------------------------------------
