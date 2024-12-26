@@ -9,6 +9,7 @@
 #
 #======================================================================
 import sys
+import time
 import os
 import re
 import urllib.parse
@@ -183,7 +184,13 @@ class configure (object):
             root = asclib.path.stdpath('config')
             self.ininame = os.path.join(root, 'dler.ini')
         self.config = ascmini.ConfigReader(self.ininame)
+        if not os.path.exists(self.ininame):
+            print('Config file not found: %s' % self.ininame)
+            sys.exit(1)
         self.name = name and name or 'default'
+        if self.name not in self.config.config:
+            print('Section %s not found in %s' % (self.name, self.ininame))
+            sys.exit(1)
         self.source = self.config.option(self.name, 'source', '')
         self.source = self.source.strip('\r\n\t ')
         cache = os.path.join(asclib.path.stdpath('cache'), 'dler')
@@ -217,7 +224,6 @@ class configure (object):
         if content is None:
             print('failed to fetch source')
             return -1
-        import base64
         text =  base64.b64decode(content).decode('utf-8', 'ignore')
         with open(self.cache, 'w') as f:
             f.write(text)
@@ -311,9 +317,81 @@ class configure (object):
 
 
 #----------------------------------------------------------------------
+# help
+#----------------------------------------------------------------------
+def help():
+    print('usage: dler.py <acton> [name]')
+    print('action:')
+    print('  update - update index')
+    print('  list - list all proxies')
+    print('  export <index> - export proxy')
+    print('  print <index> - print proxy')
+    print('  ping <index> - ping proxy')
+    return 0
+
+
+#----------------------------------------------------------------------
+# main
+#----------------------------------------------------------------------
+def main(argv = None):
+    argv = argv or sys.argv
+    argv = [n for n in argv]
+    if len(argv) < 2:
+        help()
+        return 0
+    cmd = argv[1]
+    if cmd in ('-h', 'help', '-help', '--help'):
+        help()
+        return 0
+    if cmd in ('update', 'list'):
+        name = None
+        if len(argv) > 2:
+            name = argv[2]
+        cc = configure(name = name)
+        if cmd == 'update':
+            cc.update()
+        elif cmd == 'list':
+            cc.ensure(True)
+            cc.print()
+    elif cmd in ('export', 'print', 'ping'):
+        if len(argv) < 3:
+            print('missing index, use -h for help')
+            return 0
+        index = int(argv[2])
+        name = None
+        if len(argv) > 3:
+            name = argv[3]
+        cc = configure(name = name)
+        cc.ensure(True)
+        if cmd == 'export':
+            if cc.export(index):
+                print('exported to %s' % cc.option('ss_export'))
+            else:
+                print('export failed')
+        elif cmd == 'print':
+            text = cc.generate(index)
+            print(text)
+        elif cmd == 'ping':
+            proxy = cc[index]
+            cmd = 'ping '
+            if sys.platform[:3] == 'win':
+                cmd += '-n 4 -w 2000 '
+            else:
+                cmd += '-c 4 -W 2 '
+            cmd += ' ' + proxy.host
+            os.system(cmd)
+    else:
+        print('unknown command: %s' % cmd)
+        print('use -h for help')
+        return 0
+    return 0
+
+
+#----------------------------------------------------------------------
 # testing suit
 #----------------------------------------------------------------------
 if __name__ == '__main__':
+
     def test1():
         c = configure(name = 'ss')
         # c.update()
@@ -323,6 +401,7 @@ if __name__ == '__main__':
         print(len(c.items))
         print(c.generate(0))
         return 0
+
     def test2():
         dler = ascmini.posix.load_file_text('/home/skywind/scratch/dler.txt').split('\n')
         c1 = dler[0].strip('\r\n\t ')
@@ -336,6 +415,15 @@ if __name__ == '__main__':
         p2 = ProxyInfo(c2)
         print(p2.generate())
         return 0
-    test1()
+    
+    def test3():
+        argv = ['', 'list']
+        # argv = ['', 'ping', '0']
+        # argv = ['', 'export', '0']
+        main(argv)
+        return 0
+
+    # test3()
+    main()
 
 
