@@ -221,12 +221,44 @@ def stdpath(name):
 
 
 #----------------------------------------------------------------------
+# find root directory
+#----------------------------------------------------------------------
+def find_root(path, markers = None, fallback = False):
+    if markers is None:
+        markers = ('.git', '.svn', '.hg', '.project', '.root')
+    if path is None:
+        path = os.getcwd()
+    path = os.path.abspath(path)
+    base = path
+    while True:
+        parent = os.path.normpath(os.path.join(base, '..'))
+        for marker in markers:
+            test = os.path.join(base, marker)
+            if os.path.exists(test):
+                return base
+        if os.path.normcase(parent) == os.path.normcase(base):
+            break
+        base = parent
+    if fallback:
+        return path
+    return None
+
+
+#----------------------------------------------------------------------
+# project root
+#----------------------------------------------------------------------
+def project_root(path, markers = None):
+    return find_root(path, markers, True)
+
+
+#----------------------------------------------------------------------
 # testing suit
 #----------------------------------------------------------------------
 if __name__ == '__main__':
     def test1():
         print(which('gcc'))
         print(stdpath('config'))
+        print(project_root(None))
         return 0
     test1()
 
