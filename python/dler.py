@@ -51,6 +51,7 @@ class ProxyInfo (object):
         self.host = None
         self.port = 0
         self.password = None
+        self.export = ''
         self.cipher = ''
         self.parse(url)
 
@@ -313,6 +314,7 @@ class configure (object):
             return False
         with open(export, 'w') as f:
             f.write(text)
+        proxy.export = export
         return True
 
 
@@ -365,7 +367,7 @@ def main(argv = None):
         cc.ensure(True)
         if cmd == 'export':
             if cc.export(index):
-                print('exported to %s' % cc.option('ss_export'))
+                print('exported to %s' % cc[index].export)
             else:
                 print('export failed')
         elif cmd == 'print':
