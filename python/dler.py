@@ -241,6 +241,7 @@ class configure (object):
                 update = True
         if update:
             self.update()
+        self.reload()
         return 0
 
     def reload (self):
