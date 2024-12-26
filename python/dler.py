@@ -19,6 +19,7 @@ import cinit
 import ascmini
 import asclib.regex
 import asclib.path
+import asclib.shell
 
 
 #----------------------------------------------------------------------
@@ -322,8 +323,8 @@ class configure (object):
 # help
 #----------------------------------------------------------------------
 def help():
-    print('usage: dler.py <acton> [name]')
-    print('action:')
+    print('usage: dler.py {--name=NAME} <acton>')
+    print('actions:')
     print('  update - update index')
     print('  list - list all proxies')
     print('  export <index> - export proxy')
@@ -337,33 +338,29 @@ def help():
 #----------------------------------------------------------------------
 def main(argv = None):
     argv = argv or sys.argv
-    argv = [n for n in argv]
-    if len(argv) < 2:
+    options, args = asclib.shell.getopt(argv)
+    if len(args) < 2:
         help()
         return 0
-    cmd = argv[1]
+    cmd = args[1]
     if cmd in ('-h', 'help', '-help', '--help'):
         help()
         return 0
+    name = ''
+    if 'name' in options:
+        name = options['name'].strip('\r\n\t ')
+    cc = configure(name = name)
     if cmd in ('update', 'list'):
-        name = None
-        if len(argv) > 2:
-            name = argv[2]
-        cc = configure(name = name)
         if cmd == 'update':
             cc.update()
         elif cmd == 'list':
             cc.ensure(True)
             cc.print()
     elif cmd in ('export', 'print', 'ping'):
-        if len(argv) < 3:
+        if len(args) < 3:
             print('missing index, use -h for help')
             return 0
-        index = int(argv[2])
-        name = None
-        if len(argv) > 3:
-            name = argv[3]
-        cc = configure(name = name)
+        index = int(args[2])
         cc.ensure(True)
         if cmd == 'export':
             if cc.export(index):
