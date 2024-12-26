@@ -338,11 +338,11 @@ def help():
 #----------------------------------------------------------------------
 def main(argv = None):
     argv = argv or sys.argv
-    options, args = asclib.shell.getopt(argv)
-    if len(args) < 2:
+    options, args = asclib.shell.getopt(argv[1:])
+    if len(args) < 1:
         help()
         return 0
-    cmd = args[1]
+    cmd = args[0]
     if cmd in ('-h', 'help', '-help', '--help'):
         help()
         return 0
@@ -357,10 +357,10 @@ def main(argv = None):
             cc.ensure(True)
             cc.print()
     elif cmd in ('export', 'print', 'ping'):
-        if len(args) < 3:
+        if len(args) < 2:
             print('missing index, use -h for help')
             return 0
-        index = int(args[2])
+        index = int(args[1])
         cc.ensure(True)
         if cmd == 'export':
             if cc.export(index):
@@ -416,14 +416,15 @@ if __name__ == '__main__':
         return 0
     
     def test3():
-        argv = ['', 'list']
+        argv = ['haha', 'list']
+        argv = ['haha', '--name=ss', 'list']
         # argv = ['', 'update']
         # argv = ['', 'ping', '0']
         # argv = ['', 'export', '0']
         main(argv)
         return 0
 
-    # test3()
-    main()
+    test3()
+    # main()
 
 
