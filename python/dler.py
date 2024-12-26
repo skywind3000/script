@@ -220,7 +220,7 @@ class configure (object):
             return -1
         url = self.source
         print('updating index')
-        content = ascmini.request_safe(url, timeout = 30)
+        content = ascmini.request_safe(url, timeout = 30, verbose = False)
         if content is None:
             print('failed to fetch source')
             return -1
@@ -417,6 +417,7 @@ if __name__ == '__main__':
     
     def test3():
         argv = ['', 'list']
+        # argv = ['', 'update']
         # argv = ['', 'ping', '0']
         # argv = ['', 'export', '0']
         main(argv)
