@@ -219,7 +219,7 @@ class configure (object):
             print('source url not set')
             return -1
         url = self.source
-        print('updating cache')
+        print('updating index')
         content = ascmini.request_safe(url, timeout = 30)
         if content is None:
             print('failed to fetch source')
@@ -227,7 +227,7 @@ class configure (object):
         text =  base64.b64decode(content).decode('utf-8', 'ignore')
         with open(self.cache, 'w') as f:
             f.write(text)
-        print('cache updated: %s' % self.cache)
+        print('index updated: %s' % self.cache)
         return 0
 
     def ensure (self, checktime = False):
@@ -240,7 +240,6 @@ class configure (object):
             if now - mtime > 86400:
                 update = True
         if update:
-            print('updating proxy index')
             self.update()
         return 0
 
