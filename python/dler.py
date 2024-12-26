@@ -346,7 +346,7 @@ def main(argv = None):
     if cmd in ('-h', 'help', '-help', '--help'):
         help()
         return 0
-    print('cmd', cmd)
+    # print('cmd', cmd)
     name = ''
     if 'name' in options:
         name = options['name'].strip('\r\n\t ')
