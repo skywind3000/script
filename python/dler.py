@@ -177,18 +177,18 @@ class ProxyInfo (object):
 #----------------------------------------------------------------------
 class configure (object):
 
-    def __init__ (self, ininame = None, section = None):
+    def __init__ (self, ininame = None, name = None):
         self.ininame = ininame
         if not self.ininame:
             root = asclib.path.stdpath('config')
             self.ininame = os.path.join(root, 'dler.ini')
         self.config = ascmini.ConfigReader(self.ininame)
-        self.section = section and section or 'default'
-        self.source = self.config.option(self.section, 'source', '')
+        self.name = name and name or 'default'
+        self.source = self.config.option(self.name, 'source', '')
         self.source = self.source.strip('\r\n\t ')
         cache = os.path.join(asclib.path.stdpath('cache'), 'dler')
         asclib.path.ensure_path(cache)
-        self.cache = os.path.join(cache, '%s.txt' % self.section)
+        self.cache = os.path.join(cache, '%s.txt' % self.name)
         if not os.path.exists(os.path.dirname(self.cache)):
             os.makedirs(os.path.dirname(self.cache))
         self.items = []
@@ -203,6 +203,9 @@ class configure (object):
 
     def __iter__ (self):
         return self.items.__iter__()
+
+    def option (self, name, default = None):
+        return self.config.option(self.name, name, default)
 
     def update (self):
         if not self.source:
@@ -219,6 +222,20 @@ class configure (object):
         with open(self.cache, 'w') as f:
             f.write(text)
         print('cache updated: %s' % self.cache)
+        return 0
+
+    def ensure (self, checktime = False):
+        update = False
+        if not os.path.exists(self.cache):
+            update = True
+        elif checktime:
+            mtime = os.path.getmtime(self.cache)
+            now = time.time()
+            if now - mtime > 86400:
+                update = True
+        if update:
+            print('updating proxy index')
+            self.update()
         return 0
 
     def reload (self):
@@ -249,19 +266,62 @@ class configure (object):
                 self.items.append(p)
         return 0
 
+    def print (self):
+        for index, proxy in enumerate(self.items):
+            print('[%d] %s (%s)' % (index, proxy.name, proxy.mode))
+        return 0
+
+    def generate (self, index):
+        if index < 0 or index >= len(self.items):
+            return None
+        proxy = self.items[index]
+        if proxy.mode == 'ss':
+            local_addr = self.option('ss_addr', '0.0.0.0')
+            local_port = int(self.option('ss_port', 1080))
+        elif proxy.mode == 'trojan':
+            local_addr = self.option('trojan_addr', '0.0.0.0')
+            local_port = int(self.option('trojan_port', 1080))
+        else:
+            return None
+        text = proxy.generate()
+        text = text.replace('{{LOCAL_ADDRESS}}', local_addr)
+        text = text.replace('"{{LOCAL_PORT}}"', str(local_port))
+        return text
+
+    def export (self, index) -> bool:
+        if index < 0 or index >= len(self.items):
+            return False
+        proxy = self.items[index]
+        if proxy.mode == 'ss':
+            export = self.option('ss_export', '')
+            if not export:
+                print('ss_export not set in config %s' % self.name)
+                return False
+        elif proxy.mode == 'trojan':
+            export = self.option('trojan_export', '')
+            if not export:
+                print('trojan_export not set in config %s' % self.name)
+                return False
+        text = self.generate(index)
+        if not text:
+            return False
+        with open(export, 'w') as f:
+            f.write(text)
+        return True
+
 
 #----------------------------------------------------------------------
 # testing suit
 #----------------------------------------------------------------------
 if __name__ == '__main__':
     def test1():
-        c = configure()
+        c = configure(name = 'ss')
         # c.update()
         # print(c.data)
         c.reload()
-        for p in c.items:
-            print(p)
+        c.print()
         print(len(c.items))
+        print(c.generate(0))
         return 0
     def test2():
         dler = ascmini.posix.load_file_text('/home/skywind/scratch/dler.txt').split('\n')
