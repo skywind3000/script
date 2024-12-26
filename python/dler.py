@@ -346,6 +346,7 @@ def main(argv = None):
     if cmd in ('-h', 'help', '-help', '--help'):
         help()
         return 0
+    print('cmd', cmd)
     name = ''
     if 'name' in options:
         name = options['name'].strip('\r\n\t ')
@@ -418,13 +419,14 @@ if __name__ == '__main__':
     def test3():
         argv = ['haha', 'list']
         argv = ['haha', '--name=ss', 'list']
+        argv = ['haha', '--name=ss']
         # argv = ['', 'update']
         # argv = ['', 'ping', '0']
         # argv = ['', 'export', '0']
         main(argv)
         return 0
 
-    test3()
-    # main()
+    # test3()
+    main()
 
 
