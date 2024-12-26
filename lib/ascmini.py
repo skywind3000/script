@@ -497,7 +497,33 @@ class __PosixKit (object):
         content = self.load_file_content(filename, 'rb')
         if content is None:
             return None
-        return self.string_auto_decode(content, encoding)
+        if content[:3] == b'\xef\xbb\xbf':
+            text = content[3:].decode('utf-8')
+        elif encoding is not None:
+            text = content.decode(encoding, 'ignore')
+        else:
+            text = None
+            guess = [sys.getdefaultencoding(), 'utf-8']
+            if sys.stdout and sys.stdout.encoding:
+                guess.append(sys.stdout.encoding)
+            try:
+                import locale
+                guess.append(locale.getpreferredencoding())
+            except:
+                pass
+            visit = {}
+            for name in guess + ['gbk', 'ascii', 'latin1']:
+                if name in visit:
+                    continue
+                visit[name] = 1
+                try:
+                    text = content.decode(name)
+                    break
+                except:
+                    pass
+            if text is None:
+                text = content.decode('utf-8', 'ignore')
+        return text
 
     # save file text
     def save_file_text (self, filename, content, encoding = None):
@@ -1785,91 +1811,6 @@ def json_loads(text):
         if isinstance(text, bytes):
             text = text.decode('utf-8')
     return json.loads(text)
-
-
-#----------------------------------------------------------------------
-# replace {name} dotation in pattern with macros
-#----------------------------------------------------------------------
-def regex_expand(macros, pattern, guarded = True):
-    output = []
-    pos = 0
-    size = len(pattern)
-    while pos < size:
-        ch = pattern[pos]
-        if ch == '\\':
-            output.append(pattern[pos:pos + 2])
-            pos += 2
-            continue
-        elif ch != '{':
-            output.append(ch)
-            pos += 1
-            continue
-        p2 = pattern.find('}', pos)
-        if p2 < 0:
-            output.append(ch)
-            pos += 1
-            continue
-        p3 = p2 + 1
-        name = pattern[pos + 1:p2].strip('\r\n\t ')
-        if name == '':
-            output.append(pattern[pos:p3])
-            pos = p3
-            continue
-        elif name[0].isdigit():
-            output.append(pattern[pos:p3])
-            pos = p3
-            continue
-        elif ('<' in name) or ('>' in name):
-            raise ValueError('invalid pattern name "%s"'%name)
-        if name not in macros:
-            raise ValueError('{%s} is undefined'%name)
-        if guarded:
-            output.append('(?:' + macros[name] + ')')
-        else:
-            output.append(macros[name])
-        pos = p3
-    return ''.join(output)
-
-
-#----------------------------------------------------------------------
-# build complex regex rules
-#----------------------------------------------------------------------
-def regex_build(code, macros = None, capture = True):
-    import re
-    defined = {}
-    if macros is not None:
-        for k, v in macros.items():
-            defined[k] = v
-    line_num = 0
-    for line in code.split('\n'):
-        line_num += 1
-        line = line.strip('\r\n\t ')
-        if (not line) or line.startswith('#'):
-            continue
-        pos = line.find('=')
-        if pos < 0:
-            raise ValueError('%d: not a valid rule'%line_num)
-        head = line[:pos].strip('\r\n\t ')
-        body = line[pos + 1:].strip('\r\n\t ')
-        if (not head):
-            raise ValueError('%d: empty rule name'%line_num)
-        elif head[0].isdigit():
-            raise ValueError('%d: invalid rule name "%s"'%(line_num, head))
-        elif ('<' in head) or ('>' in head):
-            raise ValueError('%d: invalid rule name "%s"'%(line_num, head))
-        try:
-            pattern = regex_expand(defined, body, guarded = not capture)
-        except ValueError as e:
-            raise ValueError('%d: %s'%(line_num, str(e)))
-        try:
-            re.compile(pattern)
-        except re.error:
-            raise ValueError('%d: invalid pattern "%s"'%(line_num, pattern))
-        if not capture:
-            defined[head] = pattern
-        else:
-            defined[head] = '(?P<%s>%s)'%(head, pattern)
-    return defined
 
 
 #----------------------------------------------------------------------
