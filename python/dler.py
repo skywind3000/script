@@ -16,8 +16,8 @@ import base64
 import json
 import cinit
 import ascmini
-import asclib
 import asclib.regex
+import asclib.path
 
 
 #----------------------------------------------------------------------
@@ -177,14 +177,18 @@ class ProxyInfo (object):
 #----------------------------------------------------------------------
 class configure (object):
 
-    def __init__ (self, ininame = None):
+    def __init__ (self, ininame = None, section = None):
         self.ininame = ininame
         if not self.ininame:
-            self.ininame = os.path.expanduser('~/.config/dler.ini')
+            root = asclib.path.stdpath('config')
+            self.ininame = os.path.join(root, 'dler.ini')
         self.config = ascmini.ConfigReader(self.ininame)
-        self.source = self.config.option('default', 'source', '')
+        self.section = section and section or 'default'
+        self.source = self.config.option(self.section, 'source', '')
         self.source = self.source.strip('\r\n\t ')
-        self.cache = os.path.expanduser('~/.cache/dler.txt')
+        cache = os.path.join(asclib.path.stdpath('cache'), 'dler')
+        asclib.path.ensure_path(cache)
+        self.cache = os.path.join(cache, '%s.txt' % self.section)
         if not os.path.exists(os.path.dirname(self.cache)):
             os.makedirs(os.path.dirname(self.cache))
         self.items = []

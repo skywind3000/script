@@ -226,6 +226,7 @@ def stdpath(name):
 if __name__ == '__main__':
     def test1():
         print(which('gcc'))
+        print(stdpath('config'))
         return 0
     test1()
 
