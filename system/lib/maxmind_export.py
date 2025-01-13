@@ -19,12 +19,12 @@ def mmdb_reader(mmdb_file):
     with maxminddb.open_database(mmdb_file) as reader:
         for network, record in reader:
             data = {
-                    'continent_code': record.get('continent', {}).get('code'),
-                    'continent_name': record.get('continent', {}).get('names', {}).get('en'),
-                    'country_iso_code': record.get('country', {}).get('iso_code'),
-                    'country_name': record.get('country', {}).get('names', {}).get('en'),
-                    'traits_is_anonymous_proxy': record.get('traits', {}).get('is_anonymous_proxy')
-                    }
+                'continent_code': record.get('continent', {}).get('code'),
+                'continent_name': record.get('continent', {}).get('names', {}).get('en'),
+                'country_iso_code': record.get('country', {}).get('iso_code'),
+                'country_name': record.get('country', {}).get('names', {}).get('en'),
+                'traits_is_anonymous_proxy': record.get('traits', {}).get('is_anonymous_proxy')
+            }
             yield [str(network), data]
     return 0
 
