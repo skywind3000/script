@@ -8,7 +8,7 @@ elif [ ! -x "$(which rsync)" ]; then
 	exit 1
 fi
 
-rsync -avrz --delete -e 'ssh -p32200' bbtest.skywind.me:/home/data/sync/ /home/data/sync/
+rsync -avrz --delete -e 'ssh -p32200' skywind@bbtest.skywind.me:/home/data/sync/ /home/data/sync/
 
 exit 0
 
