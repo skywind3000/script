@@ -12,3 +12,4 @@ rsync -avzr --delete -e 'ssh -p32200' skywind@bbtest.skywind.me:/home/data/sync/
 
 exit 0
 
+
