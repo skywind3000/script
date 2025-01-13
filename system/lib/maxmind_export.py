@@ -9,14 +9,32 @@
 #
 #======================================================================
 import sys
-import maxminddb
-import csv
 
 
 #----------------------------------------------------------------------
-# 
+# reader
+#----------------------------------------------------------------------
+def mmdb_reader(mmdb_file):
+    import maxminddb
+    with maxminddb.open_database(mmdb_file) as reader:
+        for network, record in reader:
+            data = {
+                    'continent_code': record.get('continent', {}).get('code'),
+                    'continent_name': record.get('continent', {}).get('names', {}).get('en'),
+                    'country_iso_code': record.get('country', {}).get('iso_code'),
+                    'country_name': record.get('country', {}).get('names', {}).get('en'),
+                    'traits_is_anonymous_proxy': record.get('traits', {}).get('is_anonymous_proxy')
+                    }
+            yield [str(network), data]
+    return 0
+
+
+#----------------------------------------------------------------------
+# extract
 #----------------------------------------------------------------------
 def mmdb_extract(mmdb_file, output = None):
+    import csv
+
     if output is None:
         fp = sys.stdout
     elif isinstance(output, str):
@@ -24,33 +42,23 @@ def mmdb_extract(mmdb_file, output = None):
     else:
         fp = output
 
-    # Open the MMDB file
-    with maxminddb.open_database(mmdb_file) as reader:
-        # Open the CSV file for writing
-        # Define the CSV writer
-        fieldnames = ['network', 'continent_code', 'continent_name', 
-                      'country_iso_code', 'country_name', 
-                      'traits_is_anonymous_proxy']
+    fieldnames = ['network', 'continent_code', 'continent_name', 
+                  'country_iso_code', 'country_name', 
+                  'traits_is_anonymous_proxy']
 
-        writer = csv.DictWriter(fp, fieldnames = fieldnames)
+    writer = csv.DictWriter(fp, fieldnames = fieldnames)
 
-        # Write the header
-        writer.writeheader()
+    # Write the header
+    writer.writeheader()
 
-        # Iterate through all records in the MMDB file
-        for network, record in reader:
-            # Prepare the row data
-            row = {
-                'network': str(network),
-                'continent_code': record.get('continent', {}).get('code'),
-                'continent_name': record.get('continent', {}).get('names', {}).get('en'),
-                'country_iso_code': record.get('country', {}).get('iso_code'),
-                'country_name': record.get('country', {}).get('names', {}).get('en'),
-                'traits_is_anonymous_proxy': record.get('traits', {}).get('is_anonymous_proxy')
-            }
-            # Write the row to the CSV file
-            # print(row)
-            writer.writerow(row)
+    # Iterate through all records in the MMDB file
+    for network, record in mmdb_reader(mmdb_file):
+        # Prepare the row data
+        row = record
+        row['network'] = network
+        # Write the row to the CSV file
+        # print(row)
+        writer.writerow(row)
 
     return 0
 
