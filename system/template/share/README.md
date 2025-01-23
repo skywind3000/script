@@ -27,12 +27,6 @@ DNS 写法：
 
 来刷新实际的 ipset 和 dnsmasq 配置。
 
-注意 ip 配置:
-
-- VPN1 的配置（vpn1_rules.txt 或 vpn1_extra.txt）里需要添加 8.8.4.4 
-- VPN2 的配置（vpn2_rules.txt 或 vpn2_extra.txt）里需要添加 8.8.8.8
-
-没有启用 vpn2 的话可以不用配 8.8.8.8 这个地址。
-
+注意：DNS 地址 8.8.4.4 会自动加入 VPN1 的 ipset，而 8.8.8.8 会自动加入 VPN2。
 
 
