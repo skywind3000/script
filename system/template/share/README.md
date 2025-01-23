@@ -3,9 +3,9 @@
 - direct_rules.txt: 直连 ipset DIRECT
 - direct_extra.txt: 直连 ipset DIRECT
 - vpn1_rules.txt: VPN1 ipset VPN1
-- vpn1_rules.txt: VPN1 ipset VPN1
+- vpn1_extra.txt: VPN1 ipset VPN1
 - vpn2_rules.txt: VPN2 ipset VPN1
-- vpn2_rules.txt: VPN2 ipset VPN1
+- vpn2_extra.txt: VPN2 ipset VPN1
 - dns1_rules.txt: 域名规则，生成 /etc/dnsmasq.d/50-rules-vpn1.conf
 - dns1_extra.txt: 域名规则，生成 /etc/dnsmasq.d/50-rules-vpn1.conf
 - dns2_rules.txt: 域名规则，生成 /etc/dnsmasq.d/50-rules-vpn2.conf
@@ -21,9 +21,14 @@ DNS 写法：
 
 - https://thekelleys.org.uk/dnsmasq/docs/dnsmasq-man.html
 
-内容更新：
+前面配置更新了，需要调用：
 
     sudo /etc/script/tools/update_rules.sh
 
-即可，注意 ipset 的 VPN1 里需要添加 8.8.4.4 而 VPN2 里需要添加 8.8.8.8
+来刷新实际的 ipset 和 dnsmasq 配置。
+
+注意:
+
+- VPN1 的配置（vpn1_rules.txt 或 vpn1_extra.txt）里需要添加 8.8.4.4 
+- VPN2 的配置（vpn2_rules.txt 或 vpn2_extra.txt）里需要添加 8.8.8.48
 
