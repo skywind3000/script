@@ -21,4 +21,9 @@ DNS 写法：
 
 - https://thekelleys.org.uk/dnsmasq/docs/dnsmasq-man.html
 
+内容更新：
+
+    sudo /etc/script/tools/update_rules.sh
+
+即可，注意 ipset 的 VPN1 里需要添加 8.8.4.4 而 VPN2 里需要添加 8.8.8.8
 
