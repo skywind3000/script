@@ -75,6 +75,12 @@ if [ -e "../share/dns2_extra.txt" ]; then
 	python3 /etc/script/lib/dnsmasq_convert.py dns2_extra.txt 8.8.8.8 VPN2 >> $FN
 fi
 
+echo "Adding 8.8.4.4 to VPN1"
+ipset -! add VPN1 8.8.4.4
+
+echo "Adding 8.8.8.8 to VPN2"
+ipset -! add VPN2 8.8.8.8
+
 
 echo "Restarting dnsmasq"
 
