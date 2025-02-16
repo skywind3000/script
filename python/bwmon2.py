@@ -196,6 +196,7 @@ def iftop_log(content, arpscan, logger):
             else:
                 part.append('name=%s'%info['vendor'])
         scale = 1024.0 * 1024
+        scale = 1024.0
         up = item['up_rate'] / scale
         down = item['down_rate'] / scale
         total = item['total_rate'] / scale
@@ -235,8 +236,8 @@ def main(argv = None):
         print('usage: %s <interface> [logfile]'%sys.argv[0])
         return 0
     device = argv[1]
-    logger = init_log(len(args) >= 2 and args[2] or None)
-    logger.info('bwmon2 started:')
+    logger = init_log(len(args) >= 2 and args[1] or None)
+    logger.info('Starting bandwidth detection ...')
     try:
         fmt = "'${ip}\\t${mac}\\t${name}\\t${vendor}'"
         cmd = 'arp-scan -I %s --localnet --resolve --format=%s'%(device, fmt)
