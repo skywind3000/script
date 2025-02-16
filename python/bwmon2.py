@@ -200,9 +200,13 @@ def iftop_log(content, arpscan, logger):
         up = item['up_rate'] / scale
         down = item['down_rate'] / scale
         total = item['total_rate'] / scale
+        accup = item['up_acc'] / scale
+        accdown = item['down_acc'] / scale
         part.append('up=%.2f'%up)
         part.append('down=%.02f'%down)
         part.append('total=%.02f'%total)
+        # part.append('accup=%.02f'%accup)
+        # part.append('accdown=%.02f'%accdown)
         part = [n.replace('`', '.') for n in part]
         text = '`'.join(part)
         logger.info('info: ' + text)
