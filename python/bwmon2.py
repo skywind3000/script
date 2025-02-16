@@ -241,7 +241,7 @@ def main(argv = None):
         return 0
     device = argv[1]
     logger = init_log(len(args) >= 2 and args[1] or None)
-    logger.info('Starting bandwidth detection ...')
+    logger.info('Starting bandwidth detection on %s ...' % device)
     try:
         fmt = "'${ip}\\t${mac}\\t${name}\\t${vendor}'"
         cmd = 'arp-scan -I %s --localnet --resolve --format=%s'%(device, fmt)
