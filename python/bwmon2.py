@@ -257,6 +257,7 @@ def main(argv = None):
             logger.error(iftop)
             return 1
         iftop_log(iftop, arp, logger)
+        logger.info('finished.')
     except:
         pass
     return 0
