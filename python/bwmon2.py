@@ -239,7 +239,7 @@ def main(argv = None):
     if len(args) < 1:
         print('usage: %s <interface> [logfile]'%sys.argv[0])
         return 0
-    device = argv[1]
+    device = args[0]
     logger = init_log(len(args) >= 2 and args[1] or None)
     logger.info('Starting bandwidth detection on %s ...' % device)
     try:
