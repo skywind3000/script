@@ -259,7 +259,7 @@ def main(argv = None):
         iftop_log(iftop, arp, logger)
         logger.info('finished.')
     except:
-        pass
+        logger.exception("An error occurred")
     return 0
 
 
