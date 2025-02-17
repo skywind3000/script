@@ -162,3 +162,5 @@ cython_debug/
 
 pyproject.toml
 
+test_*.py
+
