@@ -245,7 +245,7 @@ def main(argv = None):
     try:
         fmt = "'${ip}\\t${mac}\\t${name}\\t${vendor}'"
         cmd = 'arp-scan -I %s --localnet --resolve --format=%s'%(device, fmt)
-        logger.info('exec: %s'%repr(cmd))
+        logger.info('exec: %s'%cmd)
         code, arp = popen_shell(cmd)
         if code != 0:
             logger.error('arp-scan returns %d'%code)
@@ -254,7 +254,7 @@ def main(argv = None):
             return 1
         # print(arp_scan(arp))
         cmd = 'iftop -t -s 10 -n -o 10s -L 150 -i %s'%device
-        logger.info('exec: %s'%repr(cmd))
+        logger.info('exec: %s'%cmd)
         code, iftop = popen_shell(cmd)
         if code != 0:
             logger.error('iftop returns %d'%code)
