@@ -355,14 +355,14 @@ def main(argv = None):
         if cmd == 'update':
             cc.update()
         elif cmd == 'list':
-            cc.ensure(True)
+            cc.ensure(False)
             cc.print()
     elif cmd in ('export', 'print', 'ping'):
         if len(args) < 2:
             print('missing index, use -h for help')
             return 0
         index = int(args[1])
-        cc.ensure(True)
+        cc.ensure(False)
         if cmd == 'export':
             if cc.export(index):
                 print('exported to %s' % cc[index].export)
