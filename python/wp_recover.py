@@ -62,13 +62,41 @@ LOCATION_OUTPUT = 'e:/site/recover/output'
 
 
 #----------------------------------------------------------------------
+# convert wordpress content
+#----------------------------------------------------------------------
+def wp_convert_content():
+    for root, dirs, files in os.walk(LOCATION_WORDPRESS):
+        for f in files:
+            if not f.lower().endswith('.md'):
+                continue
+            fullpath = os.path.join(root, f)
+            info = md_info(fullpath)
+            if not info:
+                continue
+            if 'uuid' not in info:
+                print('error: no uuid:', fullpath)
+                print(info)
+                return 0
+            uuid = int(info.get('uuid'))
+            if 'date' not in info:
+                print('error: no date:', fullpath)
+                print(info)
+                # return 0
+            print(fullpath, uuid, info.get('date'))
+    return 0
+
+
+#----------------------------------------------------------------------
 # testing suit
 #----------------------------------------------------------------------
 if __name__ == '__main__':
     def test1():
         print(md_info(LOCATION_WORDPRESS + '/2002/vmbasic.md'))
         return 0
-    test1()
+    def test2():
+        wp_convert_content()
+        return 0
+    test2()
 
 
 
