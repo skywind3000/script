@@ -206,6 +206,37 @@ def wp_convert_legacy():
 
 
 #----------------------------------------------------------------------
+# 
+#----------------------------------------------------------------------
+def verify_post_uuid():
+    fn = LOCATION_RECOVER + '/post_list.txt'
+    content = asclib.posix.load_file_text(fn)
+    count = 0
+    for line in content.split('\n'):
+        line = line.rstrip('\r\n\t ')
+        if not line:
+            continue
+        part = line.split('\t')
+        if len(part) < 2:
+            continue
+        try:
+            uuid = int(part[0].strip())
+        except:
+            continue
+        title = part[1]
+        test_uuid = ''
+        if '-' in title:
+            pos = title.rfind('-')
+            test_uuid = title[pos + 1:].strip()
+        if test_uuid != str(uuid):
+            print('mismatch:', uuid, test_uuid, title)
+        print(part)
+        count += 1
+    print('total posts:', count)
+    return 0
+
+
+#----------------------------------------------------------------------
 # testing suit
 #----------------------------------------------------------------------
 if __name__ == '__main__':
@@ -249,7 +280,10 @@ if __name__ == '__main__':
             fp.write(text + '\n')
             print(text)
         return 0
-    test5()
+    def test6():
+        verify_post_uuid()
+        return 0
+    test6()
 
 
 
