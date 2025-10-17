@@ -123,6 +123,8 @@ LOCATION_RECOVER = 'e:/site/recover'
 LOCATION_CONTENT = 'e:/site/recover/content'
 LOCATION_LEGACY = 'e:/site/recover/legacy'
 LOCATION_OUTPUT = 'e:/site/recover/output'
+LOCATION_ARCHIVE = LOCATION_RECOVER + '/archive'
+LOCATION_STRUCTURE = LOCATION_ARCHIVE + '/skywind.me/.content.rtydraXc'
 
 
 #----------------------------------------------------------------------
@@ -256,6 +258,12 @@ def update_post_content():
     return 0
 
 
+#----------------------------------------------------------------------
+# 
+#----------------------------------------------------------------------
+def structure_extract():
+    return 0
+
 
 #----------------------------------------------------------------------
 # testing suit
@@ -305,9 +313,11 @@ if __name__ == '__main__':
         verify_post_uuid()
         return 0
     def test7():
-        update_post_content()
+        # update_post_content()
         return 0
-    test7()
+    def test8():
+        return 0
+    test8()
 
 
 
