@@ -51,7 +51,7 @@ def md_split(content):
     header_lines = []
     body_lines = []
     for line in content.split('\n'):
-        line = line.strip('\r\n\t ')
+        line = line.rstrip('\r\n\t ')
         if mode == 0:
             if not line:
                 continue
@@ -88,9 +88,37 @@ def md_info(filename):
 
 
 #----------------------------------------------------------------------
+# 
+#----------------------------------------------------------------------
+def datetime_to_local(utc_time_str):
+    from datetime import datetime, timezone, timedelta
+    utc_time_str = utc_time_str.replace('Z', '+00:00')
+    utc_dt = datetime.fromisoformat(utc_time_str)
+    local_dt = utc_dt.astimezone()
+    return local_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+
+#----------------------------------------------------------------------
+# 
+#----------------------------------------------------------------------
+def sort_numberic(names):
+    output = []
+    for name in names:
+        base, ext = os.path.splitext(name)
+        try:
+            num = int(base)
+        except:
+            num = 0
+        output.append( (num, name) )
+    output.sort()
+    return [ x[1] for x in output ]
+
+
+#----------------------------------------------------------------------
 # locations
 #----------------------------------------------------------------------
 LOCATION_WORDPRESS = 'e:/site/wordpress/content'
+LOCATION_RECOVER = 'e:/site/recover'
 LOCATION_CONTENT = 'e:/site/recover/content'
 LOCATION_LEGACY = 'e:/site/recover/legacy'
 LOCATION_OUTPUT = 'e:/site/recover/output'
@@ -127,6 +155,57 @@ def wp_convert_content():
 
 
 #----------------------------------------------------------------------
+# convert legacy wordpress content
+#----------------------------------------------------------------------
+def wp_convert_legacy():
+    for fn in os.listdir(LOCATION_LEGACY):
+        if not fn.lower().endswith('.md'):
+            continue
+        fullpath = os.path.join(LOCATION_LEGACY, fn)
+        content = asclib.posix.load_file_text(fullpath)
+        if not content:
+            print('suck')
+            break
+        header, body = md_split(content)
+        info = md_header(content)
+        uuid = int(os.path.splitext(fn)[0])
+        url = info['url'].strip()
+        rpos = url.rfind('/')
+        if rpos >= 0:
+            last = int(url[rpos + 1:].strip())
+            if last != uuid:
+                print('uuid mismatch:', uuid, last)
+                break
+        ni = {}
+        ni['uuid'] = str(uuid)
+        ni['title'] = eval(info['title'])
+        ni['status'] = 'publish'
+        ni['date'] = datetime_to_local(eval(info['date']))
+        if 'categories' in info:
+            cat = eval(info['categories'])
+            ni['categories'] = ','.join(cat)
+        if 'tags' in info:
+            tag = eval(info['tags'])
+            tt = []
+            for t in tag:
+                if t == 'Dos':
+                    t = 'DOS'
+                tt.append(t)
+            ni['tags'] = ','.join(tt)
+        print(ni)
+        cc = []
+        cc.append('---')
+        for k in ni:
+            cc.append(f'{k}: {ni[k]}')
+        cc.append('---')
+        for line in body.split('\n'):
+            cc.append(line)
+        out = os.path.join(LOCATION_OUTPUT, str(uuid) + '.md')
+        asclib.posix.save_file_text(out, '\n'.join(cc))
+    return 0
+
+
+#----------------------------------------------------------------------
 # testing suit
 #----------------------------------------------------------------------
 if __name__ == '__main__':
@@ -137,8 +216,40 @@ if __name__ == '__main__':
         wp_convert_content()
         return 0
     def test3():
+        wp_convert_legacy()
+        print(datetime_to_local('2001-04-10T07:04:52Z'))
         return 0
-    test3()
+    def test4():
+        for fn in os.listdir(LOCATION_CONTENT):
+            fullpath = os.path.join(LOCATION_CONTENT, fn)
+            info = md_info(fullpath)
+            uuid = str(info['uuid'])
+            test = os.path.join(LOCATION_OUTPUT, uuid + '.md')
+            if os.path.exists(test):
+                print('duplicated: ', fn, info['title'])
+    def test5():
+        names = []
+        for fn in os.listdir(LOCATION_RECOVER + '/convert'):
+            if not fn.lower().endswith('.md'):
+                continue
+            names.append(fn)
+        names = sort_numberic(names)
+        fp = open(LOCATION_RECOVER + '/init_posts.sh', 'w')
+        for fn in names:
+            fullname = os.path.join(LOCATION_RECOVER + '/convert', fn)
+            info = md_info(fullname)
+            uuid = info['uuid']
+            date = info['date']
+            text = 'wp post create'
+            text += f' --import_id={uuid}'
+            text += f' --post_type=post'
+            text += f' --post_status=publish'
+            text += f' --post_date="{date}" --post_title="TITLE-{uuid}"'
+            text += f' --post_content="content"'
+            fp.write(text + '\n')
+            print(text)
+        return 0
+    test5()
 
 
 
