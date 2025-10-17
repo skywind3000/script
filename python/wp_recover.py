@@ -14,6 +14,7 @@ import shutil
 import cinit
 import asclib
 import asclib.posix
+import asclib.core
 
 
 #----------------------------------------------------------------------
@@ -237,6 +238,26 @@ def verify_post_uuid():
 
 
 #----------------------------------------------------------------------
+# update post content
+#----------------------------------------------------------------------
+def update_post_content():
+    for fn in os.listdir(LOCATION_RECOVER + '/update'):
+        fullname = os.path.join(LOCATION_RECOVER + '/update', fn)
+        fullname = os.path.normpath(fullname)
+        if not os.path.exists(fullname):
+            continue
+        cmd = 'C:\\Share\\python311\\python.exe e:/site/markpress/bin/markpress.py -u ' + fullname
+        print(cmd)
+        ret = os.system(cmd)
+        if ret != 0:
+            print('Failed:', ret)
+            break
+        os.remove(fullname)
+    return 0
+
+
+
+#----------------------------------------------------------------------
 # testing suit
 #----------------------------------------------------------------------
 if __name__ == '__main__':
@@ -283,7 +304,10 @@ if __name__ == '__main__':
     def test6():
         verify_post_uuid()
         return 0
-    test6()
+    def test7():
+        update_post_content()
+        return 0
+    test7()
 
 
 
