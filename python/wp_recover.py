@@ -10,6 +10,7 @@
 #======================================================================
 import sys
 import os
+import shutil
 import cinit
 import asclib
 import asclib.posix
@@ -43,6 +44,40 @@ def md_header(content):
 
 
 #----------------------------------------------------------------------
+# split markdown header and body
+#----------------------------------------------------------------------
+def md_split(content):
+    mode = 0
+    header_lines = []
+    body_lines = []
+    for line in content.split('\n'):
+        line = line.strip('\r\n\t ')
+        if mode == 0:
+            if not line:
+                continue
+            if line.startswith('-'):
+                if line == '-' * len(line):
+                    mode = 1
+                    continue
+        elif mode == 1:
+            if line.startswith('-'):
+                if line == '-' * len(line):
+                    mode = 2
+                    continue
+            else:
+                header_lines.append(line)
+        elif mode == 2:
+            if not line:
+                continue
+            mode = 3
+        if mode == 3:
+            body_lines.append(line)
+    header = '\n'.join(header_lines)
+    body = '\n'.join(body_lines)
+    return header, body
+
+
+#----------------------------------------------------------------------
 # load header from markdown file
 #----------------------------------------------------------------------
 def md_info(filename):
@@ -65,6 +100,7 @@ LOCATION_OUTPUT = 'e:/site/recover/output'
 # convert wordpress content
 #----------------------------------------------------------------------
 def wp_convert_content():
+    count = 0
     for root, dirs, files in os.walk(LOCATION_WORDPRESS):
         for f in files:
             if not f.lower().endswith('.md'):
@@ -81,8 +117,12 @@ def wp_convert_content():
             if 'date' not in info:
                 print('error: no date:', fullpath)
                 print(info)
-                # return 0
+                return 0
             print(fullpath, uuid, info.get('date'))
+            dst = os.path.join(LOCATION_CONTENT, str(uuid) + '.md')
+            shutil.copyfile(fullpath, dst)
+            count += 1
+    print('total files:', count)
     return 0
 
 
@@ -96,7 +136,9 @@ if __name__ == '__main__':
     def test2():
         wp_convert_content()
         return 0
-    test2()
+    def test3():
+        return 0
+    test3()
 
 
 
