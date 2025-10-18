@@ -123,8 +123,6 @@ LOCATION_RECOVER = 'e:/site/recover'
 LOCATION_CONTENT = 'e:/site/recover/content'
 LOCATION_LEGACY = 'e:/site/recover/legacy'
 LOCATION_OUTPUT = 'e:/site/recover/output'
-LOCATION_ARCHIVE = LOCATION_RECOVER + '/archive'
-LOCATION_STRUCTURE = LOCATION_ARCHIVE + '/skywind.me/.content.rtydraXc'
 
 
 #----------------------------------------------------------------------
@@ -258,12 +256,6 @@ def update_post_content():
     return 0
 
 
-#----------------------------------------------------------------------
-# 
-#----------------------------------------------------------------------
-def structure_extract():
-    return 0
-
 
 #----------------------------------------------------------------------
 # testing suit
@@ -313,9 +305,24 @@ if __name__ == '__main__':
         verify_post_uuid()
         return 0
     def test7():
-        # update_post_content()
+        update_post_content()
         return 0
     def test8():
+        names = []
+        for fn in os.listdir(LOCATION_RECOVER + '/legacy'):
+            if not fn.lower().endswith('.md'):
+                continue
+            names.append(fn)
+        names = sort_numberic(names)
+        output = []
+        for name in names:
+            fullname = os.path.join(LOCATION_RECOVER, 'content', name)
+            main, _ = os.path.splitext(name)
+            if not os.path.exists(fullname):
+                # print(fullname)
+                url = 'https://skywind.me/blog/archives/' + main
+                output.append(url)
+                print(url)
         return 0
     test8()
 
