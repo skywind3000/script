@@ -15,6 +15,7 @@ import cinit
 import asclib
 import asclib.posix
 import asclib.core
+import ascmini
 
 
 #----------------------------------------------------------------------
