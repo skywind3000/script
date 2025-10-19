@@ -10,15 +10,17 @@
 #======================================================================
 import sys
 import os
+import site
 
 DIRNAME = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(os.path.normpath(os.path.join(DIRNAME, '../lib')))
+site.addsitedir(os.path.normpath(os.path.join(DIRNAME, '../lib')))
 
 
 # completion hint
 if 0:
     sys.path.append('../lib')
     sys.path.append('../../vim/lib')
+    sys.path.append('C:/Share/script/lib')
 
 
 # pylint: disable-next=wrong-import-position
@@ -26,4 +28,6 @@ import ascmini   # noqa: E402
 
 # pylint: disable-next=wrong-import-position
 import asclib    # noqa: E402
+import asclib.posix
+import asclib.core
 
