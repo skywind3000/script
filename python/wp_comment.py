@@ -11,6 +11,7 @@
 import sys
 import os
 import shutil
+import datetime
 import bs4
 import bs4.element
 import cinit
@@ -303,22 +304,79 @@ class ArchiveWebsite (object):
             comment.content = div.decode_contents()
         return 0
 
+    def __extract_legacy_author (self, comment: Comment, div: bs4.element.Tag):
+        img: bs4.element.Tag = div.find('img')
+        if img:
+            if 'class' in img.attrs:
+                if 'avatar' in img['class']:
+                    comment.avatar = img.src
+        tag = div.find('div', class_ = 'name')
+        a = tag.find('a')
+        if not a:
+            name = tag.get_text()
+            comment.author = name.strip()
+        else:
+            name = a.get_text()
+            comment.author = name.strip()
+            url = a['href']
+            comment.url = url
+        return 0
+
+    def __extract_legacy_info (self, comment: Comment, div: bs4.element.Tag):
+        tag = div.find('div', class_ = 'date')
+        if tag:
+            text = tag.get_text().strip()
+            text, _, _ = text.partition('|')
+            text = text.strip()
+            text = self.__convert_date(text)
+            comment.date = text
+        tag: bs4.element.Tag = div.find('div', class_ = 'content')
+        if tag:
+            p = tag.div.p
+            content = p.decode_contents()
+            comment.content = content
+        return 0
+
+    def __convert_date (self, text):
+        if 'at' not in text:
+            return text
+        text = text.replace('at ', '').replace(',', '')
+        text = text.replace('st', '').replace('nd', '')
+        text = text.replace('rd', '').replace('th', '')
+        parsed_date = datetime.datetime.strptime(text, "%B %d %Y %H:%M")
+        formatted_date = parsed_date.strftime("%Y-%m-%d %H:%M")
+        return formatted_date
+
     def extract_comment (self, uuid, cid, tag: bs4.element.Tag):
         comment = Comment(uuid, cid, '', '', '', '', '')
         if 'class' in tag.attrs:
             classes = tag['class']
             if 'bypostauthor' in classes:
                 comment.user = 1
-        for div in tag.div.find_all('div'):
-            if 'class' not in div.attrs:
-                continue
-            classes = div['class']
-            if 'comment-author' in classes:
-                self.__extract_author(comment, div)
-            elif 'comment-meta' in classes:
-                self.__extract_meta(comment, div)
-            elif 'comment-body' in classes:
-                self.__extract_body(comment, div)
+        version = 0
+        if tag.find('div', class_ = 'author'):
+            version = 1
+        if version == 0:
+            for div in tag.div.find_all('div'):
+                if 'class' not in div.attrs:
+                    continue
+                classes = div['class']
+                if 'comment-author' in classes:
+                    self.__extract_author(comment, div)
+                elif 'comment-meta' in classes:
+                    self.__extract_meta(comment, div)
+                elif 'comment-body' in classes:
+                    self.__extract_body(comment, div)
+        else:
+            for div in tag.find_all('div'):
+                if 'class' not in div.attrs:
+                    continue
+                classes = div['class']
+                # print('suck1', classes)
+                if 'author' in classes:
+                    self.__extract_legacy_author(comment, div)
+                elif 'info' in classes:
+                    self.__extract_legacy_info(comment, div)
         return comment
 
 
@@ -378,9 +436,9 @@ if __name__ == '__main__':
         aw = ArchiveWebsite(location('website'))
         aw.load_index()
         LOCATE = 'E:/Site/recover/'
-        print(aw[131]['filename'])
+        print(aw[120]['filename'])
         print(aw[66]['filename'])
-        comments = aw.extract_post(66)
+        comments = aw.extract_post(120)
         for comment in comments:
             comment.print()
             print('-----')
