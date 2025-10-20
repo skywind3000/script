@@ -56,7 +56,7 @@ class Comment (object):
             'reference': self.reference,
         }
 
-    def from_obj (self, obj):
+    def from_dict (self, obj):
         self.uuid = obj['uuid']
         self.cid = obj['cid']
         self.author = obj['author']
@@ -99,6 +99,9 @@ class CommentManager (object):
     def __len__ (self):
         return len(self.comments)
 
+    def __iter__ (self):
+        return self.comments.__iter__()
+
     def save (self, fn):
         arr = []
         for cid in self.comments:
@@ -112,7 +115,7 @@ class CommentManager (object):
         arr = asclib.state.load_json(fn)
         for obj in arr:
             comment = Comment(0,0,'','','','','')
-            comment.from_obj(obj)
+            comment.from_dict(obj)
             self.append(comment)
         return 0
 
@@ -156,6 +159,15 @@ class ArchiveWebsite (object):
     def __init__ (self, location):
         self.root = os.path.abspath(location)
         self.index = {}
+
+    def __len__ (self):
+        return len(self.index)
+
+    def __getitem__ (self, key):
+        return self.index[key]
+
+    def __iter__ (self):
+        return self.index.__iter__()
     
     def path (self, *args):
         return os.path.abspath(os.path.join(self.root, *args))
@@ -259,6 +271,12 @@ if __name__ == '__main__':
     def test3():
         aw = ArchiveWebsite(location('website'))
         aw.load_index()
+        LOCATE = 'E:/Site/recover/'
+        for uuid in aw:
+            item = aw[uuid]
+            fn = os.path.join(LOCATE, 'convert', '%d.md' % uuid)
+            if not os.path.exists(fn):
+                print('Missing:', fn)
         return 0
     test3()
 
