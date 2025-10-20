@@ -70,6 +70,21 @@ class Comment (object):
         self.reference = obj['reference']
         return self
 
+    def stringify (self):
+        lines = []
+        lines.append('Comment %d on Post %d' % (self.cid, self.uuid))
+        lines.append('Author: %s <%s> (%s)' % (self.author, self.email, self.url))
+        lines.append('Date: %s' % self.date)
+        lines.append('IP: %s' % self.ip)
+        lines.append('UserID: %d ParentID: %d' % (self.user, self.parent))
+        lines.append('Content:')
+        lines.append(self.content and self.content or '')
+        return '\n'.join(lines)
+
+    def print (self):
+        print(self.stringify())
+        return 0
+
 
 #----------------------------------------------------------------------
 # CommentManager
@@ -234,6 +249,7 @@ class ArchiveWebsite (object):
         if ol is None:
             return None
         commentlist = ol.find_all('li', recursive = False)
+        output = []
         for li in commentlist:
             if 'class' in li.attrs:
                 classes = li['class']
@@ -246,8 +262,15 @@ class ArchiveWebsite (object):
             if pos < 0:
                 raise Exception('bad commentid')
             cid = int(commentid[pos + 1:])
-            print(cid)
-        return 0
+            comment = self.extract_comment(uuid, cid, li)
+            output.append(comment)
+        return output
+
+    def extract_comment (self, uuid, cid, tag):
+        comment = Comment(uuid, cid, '', '', '', '', '')
+        comment.print()
+        print()
+        return comment
 
 
 
@@ -306,9 +329,10 @@ if __name__ == '__main__':
         aw = ArchiveWebsite(location('website'))
         aw.load_index()
         LOCATE = 'E:/Site/recover/'
+        print(aw[131]['filename'])
         comments = aw.extract_post(131)
         # comments = aw.extract_post(83)
-        print(comments)
+        # print(comments)
         if 0:
             for uuid in aw:
                 print(aw[uuid]['url'])
