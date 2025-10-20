@@ -315,11 +315,15 @@ class ArchiveWebsite (object):
         if not a:
             name = tag.get_text()
             comment.author = name.strip()
+            if comment.author == 'skywind':
+                comment.user = 1
         else:
             name = a.get_text()
             comment.author = name.strip()
             url = a['href']
             comment.url = url
+            if url == '/blog':
+                comment.user = 1
         return 0
 
     def __extract_legacy_info (self, comment: Comment, div: bs4.element.Tag):
@@ -341,8 +345,13 @@ class ArchiveWebsite (object):
         if 'at' not in text:
             return text
         text = text.replace('at ', '').replace(',', '')
-        text = text.replace('st', '').replace('nd', '')
-        text = text.replace('rd', '').replace('th', '')
+        pos = text.find(' ')
+        if pos >= 0:
+            p1 = text[:pos]
+            p2 = text[pos + 1:]
+            p2 = p2.replace('st', '').replace('nd', '')
+            p2 = p2.replace('rd', '').replace('th', '')
+            text = p1 + ' ' + p2
         parsed_date = datetime.datetime.strptime(text, "%B %d %Y %H:%M")
         formatted_date = parsed_date.strftime("%Y-%m-%d %H:%M")
         return formatted_date
@@ -462,7 +471,15 @@ if __name__ == '__main__':
         cm = CommentManager()
         cm.load(location('latest_commennts.json'))
         print('total comments:', len(cm))
+        for cid in cm:
+            comment = cm[cid]
+            if not comment.content:
+                print('empty comment:', comment.cid, comment.author)
+            if not comment.author:
+                print('anonymous comment:', comment.cid, comment.content)
         return 0
-    test3()
+    def test6():
+        return 0
+    test5()
 
 
