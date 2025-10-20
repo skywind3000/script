@@ -37,6 +37,7 @@ class Comment (object):
         self.content = content
         self.user = user
         self.parent = parent
+        self.avatar = ''
         self.reference = ''
 
     def __repr__ (self):
@@ -47,6 +48,7 @@ class Comment (object):
             'uuid': self.uuid,
             'cid': self.cid,
             'author': self.author,
+            'avatar': self.avatar,
             'email': self.email,
             'url': self.url,
             'ip': self.ip,
@@ -61,6 +63,7 @@ class Comment (object):
         self.uuid = obj['uuid']
         self.cid = obj['cid']
         self.author = obj['author']
+        self.avatar = obj.get('avatar', '')
         self.email = obj['email']
         self.url = obj['url']
         self.ip = obj['ip']
@@ -268,9 +271,28 @@ class ArchiveWebsite (object):
         return output
 
     def __extract_author (self, comment: Comment, div: bs4.element.Tag):
+        img: bs4.element.Tag = div.find('img')
+        if img:
+            if 'class' in img.attrs:
+                if 'avatar' in img['class']:
+                    comment.avatar = img.src
+        cite: bs4.element.Tag = div.find('cite')
+        if cite:
+            comment.author = cite.string
+            a: bs4.element.Tag = cite.find('a')
+            if a:
+                url = a['href']
+                comment.url = url
         return 0
 
     def __extract_meta (self, comment: Comment, div: bs4.element.Tag):
+        a: bs4.element.Tag = div.find('a')
+        if not a:
+            return 0
+        text = a.string
+        if 'at' in text:
+            text = text.replace('at ', '').replace('/', '-')
+        comment.date = text
         return 0
 
     def __extract_body (self, comment: Comment, div: bs4.element.Tag):
@@ -283,6 +305,10 @@ class ArchiveWebsite (object):
 
     def extract_comment (self, uuid, cid, tag: bs4.element.Tag):
         comment = Comment(uuid, cid, '', '', '', '', '')
+        if 'class' in tag.attrs:
+            classes = tag['class']
+            if 'bypostauthor' in classes:
+                comment.user = 1
         for div in tag.div.find_all('div'):
             if 'class' not in div.attrs:
                 continue
@@ -355,7 +381,9 @@ if __name__ == '__main__':
         aw.load_index()
         LOCATE = 'E:/Site/recover/'
         print(aw[131]['filename'])
+        print(aw[91]['filename'])
         comments = aw.extract_post(131)
+        # comments = aw.extract_post(91)
         # comments = aw.extract_post(83)
         # print(comments)
         if 0:
