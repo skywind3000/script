@@ -216,6 +216,40 @@ class ArchiveWebsite (object):
             self.index[uuid] = item
         return 0
 
+    def load_post (self, uuid):
+        if uuid not in self.index:
+            return None
+        item = self.index[uuid]
+        fn = item['filename']
+        content = asclib.posix.load_file_text(fn)
+        soup = bs4.BeautifulSoup(content, 'lxml')
+        return soup
+
+    def extract_post (self, uuid):
+        soup = self.load_post(uuid)
+        if soup is None:
+            return None
+        comments = soup.find('div', id = 'comments')
+        ol = comments.find('ol')
+        if ol is None:
+            return None
+        commentlist = ol.find_all('li', recursive = False)
+        for li in commentlist:
+            if 'class' in li.attrs:
+                classes = li['class']
+                if 'comment' not in classes:
+                    continue
+            if 'id' not in li.attrs:
+                print('fuck', li)
+            commentid = li['id']
+            pos = commentid.rfind('-')
+            if pos < 0:
+                raise Exception('bad commentid')
+            cid = int(commentid[pos + 1:])
+            print(cid)
+        return 0
+
+
 
 #----------------------------------------------------------------------
 # locations
@@ -272,11 +306,13 @@ if __name__ == '__main__':
         aw = ArchiveWebsite(location('website'))
         aw.load_index()
         LOCATE = 'E:/Site/recover/'
-        for uuid in aw:
-            item = aw[uuid]
-            fn = os.path.join(LOCATE, 'convert', '%d.md' % uuid)
-            if not os.path.exists(fn):
-                print('Missing:', fn)
+        comments = aw.extract_post(131)
+        # comments = aw.extract_post(83)
+        print(comments)
+        if 0:
+            for uuid in aw:
+                print(aw[uuid]['url'])
+                aw.extract_post(uuid)
         return 0
     test3()
 
