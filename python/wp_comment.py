@@ -149,6 +149,63 @@ class CommentManager (object):
 
 
 #----------------------------------------------------------------------
+# ArchiveWebsite
+#----------------------------------------------------------------------
+class ArchiveWebsite (object):
+
+    def __init__ (self, location):
+        self.root = os.path.abspath(location)
+        self.index = {}
+    
+    def path (self, *args):
+        return os.path.abspath(os.path.join(self.root, *args))
+
+    def load_index (self):
+        fn = self.path('index.json')
+        db = asclib.state.load_json(fn)
+        output = []
+        self.index = {}
+        for index in db:
+            urls = index['urls']
+            obj = None
+            for key in urls:
+                if obj is None:
+                    obj = urls[key]
+                else:
+                    raise Exception('multiple url object found')
+            url = obj['url']
+            if '/blog/archives/' not in url:
+                continue
+            if '/blog/wp-json/oembed/1.0' in url:
+                continue
+            if '/blog/archives/date/' in url:
+                continue
+            if '/blog/archives/author/' in url:
+                continue
+            if '?' in url:
+                continue
+            if 'feed' in url:
+                continue
+            item = {}
+            item['url'] = url
+            item['filename'] = self.path(obj['folder'], obj['filename'])
+            item['mimetype'] = obj['mimetype']
+            item['orignal'] = obj['url_original']
+            item['filetime'] = obj['filetime']
+            pos = url.rfind('/')
+            if pos < 0:
+                raise('Bad url')
+            slug = url[pos + 1:]
+            uuid = int(slug)
+            item['uuid'] = uuid
+            output.append((uuid, item))
+        output.sort()
+        for uuid, item in output:
+            self.index[uuid] = item
+        return 0
+
+
+#----------------------------------------------------------------------
 # locations
 #----------------------------------------------------------------------
 def location(relpath, *args):
@@ -199,6 +256,10 @@ if __name__ == '__main__':
         cm.load(location('skywindinside.json'))
         print(len(cm))
         return 0
-    test2()
+    def test3():
+        aw = ArchiveWebsite(location('website'))
+        aw.load_index()
+        return 0
+    test3()
 
 
