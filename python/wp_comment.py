@@ -319,8 +319,6 @@ class ArchiveWebsite (object):
                 self.__extract_meta(comment, div)
             elif 'comment-body' in classes:
                 self.__extract_body(comment, div)
-        comment.print()
-        print()
         return comment
 
 
@@ -381,15 +379,31 @@ if __name__ == '__main__':
         aw.load_index()
         LOCATE = 'E:/Site/recover/'
         print(aw[131]['filename'])
-        print(aw[91]['filename'])
-        comments = aw.extract_post(131)
-        # comments = aw.extract_post(91)
-        # comments = aw.extract_post(83)
+        print(aw[66]['filename'])
+        comments = aw.extract_post(66)
+        for comment in comments:
+            comment.print()
+            print('-----')
+    def test4():
+        aw = ArchiveWebsite(location('website'))
+        cm = CommentManager()
+        aw.load_index()
         # print(comments)
-        if 0:
-            for uuid in aw:
-                print(aw[uuid]['url'])
-                aw.extract_post(uuid)
+        for uuid in aw:
+            print(aw[uuid]['url'])
+            comments = aw.extract_post(uuid)
+            if comments is None:
+                print('skip')
+                continue
+            for comment in comments:
+                cm.append(comment)
+            print('extracted %d comments' % len(comments))
+        cm.save(location('latest_commennts.json'))
+        return 0
+    def test5():
+        cm = CommentManager()
+        cm.load(location('latest_commennts.json'))
+        print('total comments:', len(cm))
         return 0
     test3()
 
