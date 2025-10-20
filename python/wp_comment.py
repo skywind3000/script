@@ -12,6 +12,7 @@ import sys
 import os
 import shutil
 import bs4
+import bs4.element
 import cinit
 import asclib
 import asclib.posix
@@ -266,8 +267,32 @@ class ArchiveWebsite (object):
             output.append(comment)
         return output
 
-    def extract_comment (self, uuid, cid, tag):
+    def __extract_author (self, comment: Comment, div: bs4.element.Tag):
+        return 0
+
+    def __extract_meta (self, comment: Comment, div: bs4.element.Tag):
+        return 0
+
+    def __extract_body (self, comment: Comment, div: bs4.element.Tag):
+        p: bs4.element.Tag = div.find('p')
+        if p is not None:
+            comment.content = p.decode_contents()
+        else:
+            comment.content = div.decode_contents()
+        return 0
+
+    def extract_comment (self, uuid, cid, tag: bs4.element.Tag):
         comment = Comment(uuid, cid, '', '', '', '', '')
+        for div in tag.div.find_all('div'):
+            if 'class' not in div.attrs:
+                continue
+            classes = div['class']
+            if 'comment-author' in classes:
+                self.__extract_author(comment, div)
+            elif 'comment-meta' in classes:
+                self.__extract_meta(comment, div)
+            elif 'comment-body' in classes:
+                self.__extract_body(comment, div)
         comment.print()
         print()
         return comment
