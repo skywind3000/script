@@ -297,11 +297,7 @@ class ArchiveWebsite (object):
         return 0
 
     def __extract_body (self, comment: Comment, div: bs4.element.Tag):
-        p: bs4.element.Tag = div.find('p')
-        if p is not None:
-            comment.content = p.decode_contents()
-        else:
-            comment.content = div.decode_contents()
+        comment.content = div.decode_contents()
         return 0
 
     def __extract_legacy_author (self, comment: Comment, div: bs4.element.Tag):
@@ -336,8 +332,7 @@ class ArchiveWebsite (object):
             comment.date = text
         tag: bs4.element.Tag = div.find('div', class_ = 'content')
         if tag:
-            p = tag.div.p
-            content = p.decode_contents()
+            content = tag.div.decode_contents()
             comment.content = content
         return 0
 
@@ -417,11 +412,15 @@ TABLE_ROWS = {i: key for i, key in enumerate(TABLE_STRUCTURE)}
 # gmt time conversion
 #----------------------------------------------------------------------
 def gmt_time_conversion(date_str):
-    if len(date_str) < 15:
+    # print(f'converting time: "{date_str}"')
+    if len(date_str) == 16:
+        dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M")
+    elif len(date_str) == 19:
+        dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+    else:
         return date_str
-    dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M")
     d2 = dt - datetime.timedelta(hours = 8)
-    gmt_date_str = d2.strftime("%Y-%m-%d %H:%M")
+    gmt_date_str = d2.strftime("%Y-%m-%d %H:%M:%S")
     return gmt_date_str
 
 
@@ -446,6 +445,21 @@ def comment_to_row(comment: Comment):
     row[13] = str(comment.parent)
     row[14] = str(comment.user)
     return row
+
+
+#----------------------------------------------------------------------
+# 
+#----------------------------------------------------------------------
+def export_comments_to_csv(cm: CommentManager, filename: str):
+    import csv
+    with open(filename, 'w', encoding = 'utf-8', newline = '') as f:
+        writer = csv.writer(f)
+        writer.writerow(TABLE_STRUCTURE)
+        for cid in cm:
+            comment = cm[cid]
+            row = comment_to_row(comment)
+            writer.writerow(row)
+    return 0
 
 
 #----------------------------------------------------------------------
@@ -523,11 +537,11 @@ if __name__ == '__main__':
             for comment in comments:
                 cm.append(comment)
             print('extracted %d comments' % len(comments))
-        cm.save(location('latest_commennts.json'))
+        cm.save(location('latest_comments.json'))
         return 0
     def test5():
         cm = CommentManager()
-        cm.load(location('latest_commennts.json'))
+        cm.load(location('latest_comments.json'))
         print('total comments:', len(cm))
         for cid in cm:
             comment = cm[cid]
@@ -538,7 +552,11 @@ if __name__ == '__main__':
         return 0
     def test6():
         print(gmt_time_conversion('2025-10-18 06:30'))
+        cm = CommentManager()
+        cm.load(location('skywind_comments.json'))
+        print(len(cm))
+        export_comments_to_csv(cm, location('skywind_comments.csv'))
         return 0
-    test6()
+    test5()
 
 
