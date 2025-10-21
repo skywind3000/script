@@ -551,12 +551,35 @@ if __name__ == '__main__':
                 print('anonymous comment:', comment.cid, comment.content)
         return 0
     def test6():
+        cm1 = CommentManager()
+        cm2 = CommentManager()
+        cm1.load(location('skywindinside.json'))
+        cm2.load(location('latest_comments.json'))
+        count0 = len(cm1)
+        count1 = 0
+        count2 = 0
+        for cid in cm2:
+            comment = cm2[cid]
+            if comment.uuid == 3:
+                comment.uuid = 41
+            if cid not in cm1:
+                cm1.append(comment)
+                count1 += 1
+            else:
+                count2 += 1
+        print('original comments:', count0)
+        print('new comments:', count1)
+        print('duplicate comments:', count2)
+        print('total comments:', len(cm1))
+        cm1.save(location('skywind_comments.json'))
+        return 0
+    def test7():
         print(gmt_time_conversion('2025-10-18 06:30'))
         cm = CommentManager()
         cm.load(location('skywind_comments.json'))
         print(len(cm))
         export_comments_to_csv(cm, location('skywind_comments.csv'))
         return 0
-    test5()
+    test7()
 
 
