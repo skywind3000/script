@@ -559,12 +559,13 @@ if __name__ == '__main__':
         count1 = 0
         count2 = 0
         for cid in cm2:
-            comment = cm2[cid]
+            comment: Comment = cm2[cid]
             if comment.uuid == 3:
                 comment.uuid = 41
             if cid not in cm1:
                 cm1.append(comment)
                 count1 += 1
+                content = comment.content
             else:
                 count2 += 1
         print('original comments:', count0)
