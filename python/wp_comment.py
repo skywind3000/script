@@ -389,6 +389,64 @@ class ArchiveWebsite (object):
         return comment
 
 
+#----------------------------------------------------------------------
+# tables
+#----------------------------------------------------------------------
+TABLE_STRUCTURE = (
+    "comment_ID",
+    "comment_post_ID",
+    "comment_author",
+    "comment_author_email",
+    "comment_author_url",
+    "comment_author_IP",
+    "comment_date",
+    "comment_date_gmt",
+    "comment_content",
+    "comment_karma",
+    "comment_approved",
+    "comment_agent",
+    "comment_type",
+    "comment_parent",
+    "user_id"
+    )
+
+TABLE_ROWS = {i: key for i, key in enumerate(TABLE_STRUCTURE)}
+
+
+#----------------------------------------------------------------------
+# gmt time conversion
+#----------------------------------------------------------------------
+def gmt_time_conversion(date_str):
+    if len(date_str) < 15:
+        return date_str
+    dt = datetime.datetime.strptime(date_str, "%Y-%m-%d %H:%M")
+    d2 = dt - datetime.timedelta(hours = 8)
+    gmt_date_str = d2.strftime("%Y-%m-%d %H:%M")
+    return gmt_date_str
+
+
+#----------------------------------------------------------------------
+# comment to row
+#----------------------------------------------------------------------
+def comment_to_row(comment: Comment):
+    row = [''] * len(TABLE_STRUCTURE)
+    row[0] = str(comment.cid)
+    row[1] = str(comment.uuid)
+    row[2] = comment.author
+    row[3] = comment.email and comment.email or ''
+    row[4] = comment.url and comment.url or ''
+    row[5] = comment.ip and comment.ip or ''
+    row[6] = comment.date and comment.date or ''
+    row[7] = gmt_time_conversion(comment.date)
+    row[8] = comment.content
+    row[9] = '0'
+    row[10] = 1
+    row[11] = ''
+    row[12] = ''
+    row[13] = str(comment.parent)
+    row[14] = str(comment.user)
+    return row
+
 
 #----------------------------------------------------------------------
 # locations
@@ -479,7 +537,8 @@ if __name__ == '__main__':
                 print('anonymous comment:', comment.cid, comment.content)
         return 0
     def test6():
+        print(gmt_time_conversion('2025-10-18 06:30'))
         return 0
-    test5()
+    test6()
 
 
