@@ -19,6 +19,7 @@ import asclib
 import asclib.posix
 import asclib.core
 import asclib.state
+import asclib.string
 import ascmini
 
 
@@ -39,7 +40,7 @@ class Comment (object):
         self.user = user
         self.parent = parent
         self.avatar = ''
-        self.reference = ''
+        self.origin = ''
 
     def __repr__ (self):
         return '<Comment %d:%d %s>' % (self.uuid, self.cid, self.author)
@@ -57,7 +58,7 @@ class Comment (object):
             'content': self.content,
             'user': self.user,
             'parent': self.parent,
-            'reference': self.reference,
+            'origin': self.origin,
         }
 
     def from_dict (self, obj):
@@ -72,7 +73,7 @@ class Comment (object):
         self.content = obj['content']
         self.user = obj['user']
         self.parent = obj['parent']
-        self.reference = obj['reference']
+        self.origin = obj.get('origin', '')
         return self
 
     def stringify (self):
@@ -132,6 +133,8 @@ class CommentManager (object):
 
     def load (self, fn):
         self.reset()
+        if not os.path.exists(fn):
+            raise IOError('file not found: %s' % fn)
         arr = asclib.state.load_json(fn)
         for obj in arr:
             comment = Comment(0,0,'','','','','')
@@ -554,18 +557,21 @@ if __name__ == '__main__':
         cm1 = CommentManager()
         cm2 = CommentManager()
         cm1.load(location('skywindinside.json'))
-        cm2.load(location('latest_comments.json'))
+        cm2.load(location('comment_website.json'))
         count0 = len(cm1)
         count1 = 0
         count2 = 0
+        for cid in cm1:
+            comment: Comment = cm1[cid]
+            comment.origin = 'export'
         for cid in cm2:
             comment: Comment = cm2[cid]
+            comment.origin = 'website'
             if comment.uuid == 3:
                 comment.uuid = 41
             if cid not in cm1:
                 cm1.append(comment)
                 count1 += 1
-                content = comment.content
             else:
                 count2 += 1
         print('original comments:', count0)
@@ -591,6 +597,6 @@ if __name__ == '__main__':
         print(len(cm))
         export_comments_to_csv(cm, location('skywind_comments.csv'))
         return 0
-    test7()
+    test6()
 
 
