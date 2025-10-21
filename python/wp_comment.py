@@ -571,6 +571,16 @@ if __name__ == '__main__':
         print('new comments:', count1)
         print('duplicate comments:', count2)
         print('total comments:', len(cm1))
+        for cid in cm1:
+            comment = cm1[cid]
+            if comment.uuid == 3:
+                comment.uuid = 41
+            if comment.url == 'http://www.skywind.me/blog':
+                comment.url = '/blog'
+            elif comment.url == 'http://skywind.me/blog':
+                comment.url = '/blog'
+            elif comment.url == 'http://www.joynb.net/blog':
+                comment.url = '/blog'
         cm1.save(location('skywind_comments.json'))
         return 0
     def test7():
