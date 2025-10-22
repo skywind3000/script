@@ -17,11 +17,11 @@ import asclib
 import wp_comment
 
 from wp_comment import Comment, CommentManager
-from wp_comment import location
+from wp_comment import location, ArchiveWebsite
 
 
 #----------------------------------------------------------------------
-# 
+# clean_content(content: str) 
 #----------------------------------------------------------------------
 def clean_content(content: str) -> str:
     cite = ''
@@ -73,6 +73,18 @@ def analyse_comments(filename) -> int:
 
 
 #----------------------------------------------------------------------
+# 
+#----------------------------------------------------------------------
+def analyse_view_count():
+    aw = ArchiveWebsite('e:/site/recover/website')
+    aw.load_index()
+    print(aw[3163]['filename'])
+    for uuid in aw:
+        item = aw[uuid]
+        # print(uuid, item['filename'])
+    return 0
+
+#----------------------------------------------------------------------
 # testing suit
 #----------------------------------------------------------------------
 if __name__ == '__main__':
@@ -84,5 +96,10 @@ if __name__ == '__main__':
         cm.load(location('comment_cleaned.json'))
         print(len(cm))
         wp_comment.export_comments_to_csv(cm, location('comment_cleaned.csv'))
-    test2()
+    def test3():
+        analyse_view_count()
+        return 0
+    test3()
+
+
 

@@ -270,8 +270,9 @@ class ArchiveWebsite (object):
             if pos < 0:
                 raise Exception('bad commentid')
             cid = int(commentid[pos + 1:])
-            comment = self.extract_comment(uuid, cid, li)
-            output.append(comment)
+            comments = self.extract_comment(uuid, cid, li, 0)
+            for comment in comments:
+                output.append(comment)
         return output
 
     def __extract_author (self, comment: Comment, div: bs4.element.Tag):
@@ -354,8 +355,10 @@ class ArchiveWebsite (object):
         formatted_date = parsed_date.strftime("%Y-%m-%d %H:%M")
         return formatted_date
 
-    def extract_comment (self, uuid, cid, tag: bs4.element.Tag):
+    def extract_comment (self, uuid, cid, tag: bs4.element.Tag, parent: int):
         comment = Comment(uuid, cid, '', '', '', '', '')
+        comment.parent = parent
+        output = []
         if 'class' in tag.attrs:
             classes = tag['class']
             if 'bypostauthor' in classes:
@@ -384,7 +387,21 @@ class ArchiveWebsite (object):
                     self.__extract_legacy_author(comment, div)
                 elif 'info' in classes:
                     self.__extract_legacy_info(comment, div)
-        return comment
+        output.append(comment)
+        ul = tag.find('ul', class_ = 'children')
+        if ul:
+            for li in ul.find_all('li', recursive = False):
+                if 'id' not in li.attrs:
+                    continue
+                commentid = li['id']
+                pos = commentid.rfind('-')
+                if pos < 0:
+                    raise Exception('bad commentid')
+                child_cid = int(commentid[pos + 1:])
+                child_comments = self.extract_comment(uuid, child_cid, li, cid)
+                for child_comment in child_comments:
+                    output.append(child_comment)
+        return output
 
 
 #----------------------------------------------------------------------
@@ -520,9 +537,9 @@ if __name__ == '__main__':
         aw = ArchiveWebsite(location('website'))
         aw.load_index()
         LOCATE = 'E:/Site/recover/'
-        print(aw[120]['filename'])
-        print(aw[66]['filename'])
-        comments = aw.extract_post(120)
+        # print(aw[120]['filename'])
+        print(aw[3163]['filename'])
+        comments = aw.extract_post(3163)
         for comment in comments:
             comment.print()
             print('-----')
@@ -597,6 +614,6 @@ if __name__ == '__main__':
         print(len(cm))
         export_comments_to_csv(cm, location('skywind_comments.csv'))
         return 0
-    test6()
+    test3()
 
 
