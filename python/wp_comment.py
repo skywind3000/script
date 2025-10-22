@@ -614,6 +614,6 @@ if __name__ == '__main__':
         print(len(cm))
         export_comments_to_csv(cm, location('skywind_comments.csv'))
         return 0
-    test3()
+    test6()
 
 

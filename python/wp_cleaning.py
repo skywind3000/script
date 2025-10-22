@@ -89,7 +89,7 @@ def analyse_view_count():
 #----------------------------------------------------------------------
 if __name__ == '__main__':
     def test1():
-        analyse_comments(location('comment_primitive.json'))
+        analyse_comments(location('comment_merged.json'))
         return 0
     def test2():
         cm = CommentManager()
@@ -99,7 +99,7 @@ if __name__ == '__main__':
     def test3():
         analyse_view_count()
         return 0
-    test3()
+    test2()
 
 
 
