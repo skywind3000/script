@@ -12,6 +12,7 @@ import sys
 import os
 import time
 import bs4
+import csv
 import cinit
 import asclib
 import wp_comment
@@ -85,6 +86,83 @@ def analyse_view_count():
     return 0
 
 #----------------------------------------------------------------------
+# 
+#----------------------------------------------------------------------
+def pvc_analyse_json():
+    array = asclib.state.load_json(location('website/index.json'))
+    items = {}
+    pattern1 = 'blog/wp-json/pvc/v1/increase'
+    pattern2 = 'blog/wp-json/pvc/v1/view'
+    for item in array:
+        urls = item['urls']
+        for key in urls:
+            obj = urls[key]
+            url = obj['url']
+            if (pattern1 not in url) and (pattern2 not in url):
+                continue
+            pos = url.rfind('/')
+            if pos < 0:
+                continue
+            assert(obj['folder'] == 'html')
+            text = url[pos + 1:]
+            name = obj['filename']
+            fn = os.path.join(location('website/html', name))
+            data = asclib.state.load_json(fn)
+            assert(data['success'] == True)
+            for key in data['items']:
+                info = data['items'][key]
+                uuid = info['post_id']
+                view = info['total_view']
+                if uuid not in items:
+                    items[uuid] = view
+                else:
+                    previous = items[uuid]
+                    if view > previous:
+                        items[uuid] = view
+    return items
+
+
+#----------------------------------------------------------------------
+# 
+#----------------------------------------------------------------------
+def pvc_analyse_count():
+    items = pvc_analyse_json()
+    fn = 'g:/download/firefox/wp_pvc_total.csv'
+    index = {}
+    with open(fn, 'r', encoding='utf-8') as f:
+        csv_reader = csv.reader(f)
+        next(csv_reader)
+        for row in csv_reader:
+            print(row)
+            uuid = int(row[1])
+            pvc = int(row[0])
+            index[uuid] = pvc
+    for uuid in items:
+        if uuid not in index:
+            print('missing', uuid)
+            index[uuid] = len(index) + 1
+    fn = location('wp_pvc_total.csv')
+    with open(fn, 'w', encoding = 'utf-8') as f:
+        csv_writer = csv.writer(f)
+        csv_writer.writerow(["id", "postnum", "postcount"])
+        for uuid in index:
+            pvc = index[uuid]
+            if uuid not in items:
+                print('missing count', uuid)
+                continue
+            count = items[uuid]
+            test = location('combine/%d.md'%uuid)
+            if not os.path.exists(test):
+                print('skip uuid', uuid)
+                continue
+            csv_writer.writerow([str(pvc), str(uuid), str(count)])
+    # for uuid in items:
+    #     print(uuid, items[uuid])
+    # print('total', len(items))
+    return 0
+
+
+#----------------------------------------------------------------------
 # testing suit
 #----------------------------------------------------------------------
 if __name__ == '__main__':
@@ -99,7 +177,10 @@ if __name__ == '__main__':
     def test3():
         analyse_view_count()
         return 0
-    test2()
+    def test4():
+        pvc_analyse_count()
+        return 0
+    test4()
 
 
 
