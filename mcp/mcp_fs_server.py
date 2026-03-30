@@ -6,6 +6,7 @@
   - read_file: 读取文件内容
   - get_file_info: 获取文件/目录元信息
   - search_files: 按 glob 模式搜索文件
+  - grep: 在文件内容中搜索匹配的文本或正则表达式
 
 用法：
   直接运行:  python mcp_fs_server.py
@@ -22,6 +23,7 @@
 """
 
 import os
+import re
 import sys
 import stat
 import datetime
@@ -133,6 +135,136 @@ def search_files(
                 if len(results) >= max_results:
                     return results
     return results
+
+
+# 判断文件是否为二进制文件（检查前 8KB 是否含 null 字节）
+_BINARY_CHECK_SIZE = 8192
+
+
+def _is_binary(path: str) -> bool:
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(_BINARY_CHECK_SIZE)
+        return b"\x00" in chunk
+    except OSError:
+        return True
+
+
+@mcp.tool()
+def grep(
+    pattern: str,
+    path: str,
+    file_pattern: str = "*",
+    ignore_case: bool = False,
+    is_regex: bool = True,
+    context_lines: int = 0,
+    max_results: int = 200,
+    max_file_size: int = 5 * 1024 * 1024,
+) -> dict:
+    """在文件或目录中搜索匹配的文本/正则表达式，返回匹配的行及上下文。
+
+    Args:
+        pattern: 搜索模式（正则表达式或纯文本）。
+        path: 要搜索的文件路径或目录路径。若为目录则递归搜索。
+        file_pattern: 文件名 glob 过滤（如 "*.py"），仅在搜索目录时生效。
+        ignore_case: 是否忽略大小写，默认 False。
+        is_regex: pattern 是否为正则表达式，默认 True。若为 False 则按字面文本匹配。
+        context_lines: 每个匹配行前后显示的上下文行数，默认 0。
+        max_results: 最大返回匹配数，默认 200。
+        max_file_size: 跳过超过此大小（字节）的文件，默认 5MB。
+    """
+    path = os.path.abspath(path)
+
+    # 编译正则
+    flags = re.IGNORECASE if ignore_case else 0
+    if not is_regex:
+        pattern = re.escape(pattern)
+    try:
+        regex = re.compile(pattern, flags)
+    except re.error as e:
+        raise ValueError(f"无效的正则表达式: {e}")
+
+    matches: list[dict] = []
+    files_searched = 0
+    files_with_matches = 0
+
+    def _grep_file(filepath: str) -> None:
+        nonlocal files_searched, files_with_matches
+
+        # 跳过过大的文件
+        try:
+            if os.path.getsize(filepath) > max_file_size:
+                return
+        except OSError:
+            return
+
+        # 跳过二进制文件
+        if _is_binary(filepath):
+            return
+
+        files_searched += 1
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            return
+
+        file_has_match = False
+        for line_no, line in enumerate(lines, start=1):
+            if len(matches) >= max_results:
+                return
+            if regex.search(line):
+                if not file_has_match:
+                    file_has_match = True
+                    files_with_matches += 1
+
+                match_entry: dict = {
+                    "file": filepath,
+                    "line": line_no,
+                    "content": line.rstrip("\n\r"),
+                }
+
+                # 添加上下文行
+                if context_lines > 0:
+                    before_start = max(0, line_no - 1 - context_lines)
+                    before = [
+                        l.rstrip("\n\r") for l in lines[before_start : line_no - 1]
+                    ]
+                    after_end = min(len(lines), line_no + context_lines)
+                    after = [l.rstrip("\n\r") for l in lines[line_no:after_end]]
+                    if before:
+                        match_entry["before"] = before
+                    if after:
+                        match_entry["after"] = after
+
+                matches.append(match_entry)
+
+    if os.path.isfile(path):
+        _grep_file(path)
+    elif os.path.isdir(path):
+        for root, dirs, files in os.walk(path):
+            dirs[:] = [
+                d for d in dirs if not d.startswith(".") and d != "__pycache__"
+            ]
+            for name in sorted(files):
+                if fnmatch.fnmatch(name, file_pattern):
+                    _grep_file(os.path.join(root, name))
+                    if len(matches) >= max_results:
+                        break
+            if len(matches) >= max_results:
+                break
+    else:
+        raise ValueError(f"路径不存在: {path}")
+
+    return {
+        "pattern": pattern,
+        "flags": "i" if ignore_case else "",
+        "files_searched": files_searched,
+        "files_with_matches": files_with_matches,
+        "total_matches": len(matches),
+        "truncated": len(matches) >= max_results,
+        "matches": matches,
+    }
 
 
 if __name__ == "__main__":
