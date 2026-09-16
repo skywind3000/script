@@ -13,7 +13,7 @@
 # 1. 密码按传入值原样存储，哈希/加盐由外层决定，本模块不介入算法
 # 2. payment/deposit 的 money 必须是大于 0 的有限数字，按 2 位小数处理
 # 3. status: 0=正常, 1=封禁（封禁后禁止登录/支付/充值）
-# 4. mode: 0=login 时更新登录统计(LastLoginDate/LoginTimes/ip)，非 0 只验证
+# 4. mode: 0=login 时更新登录统计(LastLoginDate/ip)，非 0 只验证
 # 5. 三个后端行为对齐：字段表、错误码、大小写敏感比较、应用侧时间
 # 6. MySQL 表用 init=True 初始化；旧表结构迁移为 best-effort（仅提示）
 # 7. update() 不能修改密码（白名单不含 pass），改密码请用 passwd()
