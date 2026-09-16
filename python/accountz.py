@@ -6,7 +6,7 @@
 # accountz.py - 账号存储：sqlite / mysql / mongo 三个后端
 #
 # Created by skywind on 2017/03/16
-# Last change: 2026/09/16 16:07:42
+# Last change: 2026/09/16 16:25:00
 #
 # 设计说明：
 # 
@@ -15,8 +15,7 @@
 # 3. status: 0=正常, 1=封禁（封禁后禁止登录/支付/充值）
 # 4. mode: 0=login 时更新登录统计(LastLoginDate/ip)，非 0 只验证
 # 5. 三个后端行为对齐：字段表、错误码、大小写敏感比较、应用侧时间
-# 6. MySQL 表用 init=True 初始化；旧表结构迁移为 best-effort（仅提示）
-# 7. update() 不能修改密码（白名单不含 pass），改密码请用 passwd()
+# 6. update() 不能修改密码（白名单不含 pass），改密码请用 passwd()
 #
 #======================================================================
 from __future__ import print_function
@@ -52,11 +51,10 @@ if sys.version_info[0] >= 3:
 class AccountBase (object):
 
 	# 字段表，顺序必须与 SELECT * 返回的列顺序一致（SQL 后端按位置取值）
-	FIELDS = ( 'uid', 'urs', 'cid', 'name', 'pass', 'gender', 'credit',
-		'gold', 'level', 'exp', 'birthday', 'icon', 'mail', 'mobile',
-		'sign', 'photo', 'intro', 'misc', 'src', 'ip', 'RegDate',
-		'LastLoginDate', 'LoginTimes', 'CreditConsumed',
-		'GoldConsumed', 'status' )
+	FIELDS = ( 'uid', 'urs', 'cid', 'name', 'pass', 'status', 'gender',
+		'credit', 'gold', 'level', 'exp', 'birthday', 'icon', 'mail',
+		'mobile', 'sign', 'photo', 'intro', 'misc', 'src', 'ip', 'RegDate',
+		'LastLoginDate', 'LoginTimes', 'CreditConsumed', 'GoldConsumed' )
 
 	# 金额相关字段
 	MONEY_FIELDS = ( 'credit', 'gold', 'CreditConsumed', 'GoldConsumed' )
@@ -105,11 +103,7 @@ class AccountBase (object):
 		if record is None:
 			return None
 		user = {}
-		size = len(record)
 		for i, k in enumerate(self.FIELDS):
-			if i >= size:
-				user[k] = 0 if k == 'status' else None
-				continue
 			v = record[i]
 			if k == 'misc':
 				user[k] = self._misc_load(v)
@@ -117,12 +111,11 @@ class AccountBase (object):
 				user[k] = v
 		return user
 
-	# 从记录里取 status（兼容没有 status 列的旧表）
+	# 从记录里取 status
 	def _record_status (self, record):
-		i = self._names['status']
-		if record is None or i >= len(record):
+		if record is None:
 			return 0
-		return record[i] or 0
+		return record[self._names['status']] or 0
 
 	# misc 字段解码：json 文本 -> 对象，坏数据 -> 原样返回字符串
 	def _misc_load (self, v):
@@ -160,6 +153,7 @@ class AccountLocal (AccountBase):
 		    "cid" INTEGER DEFAULT (0),
 		    "name" VARCHAR(32) NOT NULL DEFAULT(''),			
 		    "pass" VARCHAR(64) NOT NULL DEFAULT(''),
+			"status" INTEGER DEFAULT (0),
 		    "gender" INTEGER DEFAULT (0),
 			"credit" REAL DEFAULT (0),
 		    "gold" REAL DEFAULT (0),
@@ -169,7 +163,7 @@ class AccountLocal (AccountBase):
 		    "icon" INTEGER DEFAULT (0),
 		    "mail" VARCHAR(88),
 		    "mobile" VARCHAR(32), 
-			"sign" VARCHAR(32),			
+			"sign" VARCHAR(32),
 			"photo" VARCHAR(256),
 			"intro" VARCHAR(256),
 			"misc" TEXT,
@@ -179,12 +173,9 @@ class AccountLocal (AccountBase):
 		    "LastLoginDate" DATETIME,
 			"LoginTimes" INTEGER DEFAULT (0),
 			"CreditConsumed" REAL DEFAULT (0),
-			"GoldConsumed" REAL DEFAULT (0),
-			"status" INTEGER DEFAULT (0)
+			"GoldConsumed" REAL DEFAULT (0)
 		);
 		CREATE INDEX IF NOT EXISTS "account_3" ON account (cid);
-		DROP INDEX IF EXISTS "account_1";
-		DROP INDEX IF EXISTS "account_2";
 		'''
 
 		# timeout 即 sqlite busy_timeout（秒），多线程/多进程防止 database is locked
@@ -197,12 +188,6 @@ class AccountLocal (AccountBase):
 
 		with self.__lock:
 			self.__conn.executescript(sql)
-			# 旧库迁移：补充 status 字段（account_1/account_2 已在上面删除）
-			cursor = self.__conn.execute('PRAGMA table_info(account)')
-			columns = [ n[1] for n in cursor.fetchall() ]
-			cursor.close()
-			if 'status' not in columns:
-				self.__conn.execute('ALTER TABLE account ADD COLUMN status INTEGER DEFAULT 0')
 			self.__conn.commit()
 		return True
 
@@ -615,7 +600,6 @@ class AccountMySQL (AccountBase):
 			self.__conn.commit()
 		finally:
 			c.close()
-		self.__migrate(database)
 		# 重新带 db 连接，保证 ping 重连后不会丢掉当前库
 		self.__conn.close()
 		uri = dict(self.__base)
@@ -633,6 +617,7 @@ class AccountMySQL (AccountBase):
 		    `cid` INT DEFAULT 0,
 		    `name` VARCHAR(32) NOT NULL DEFAULT '',			
 		    `pass` VARCHAR(64) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL DEFAULT '',
+			`status` INT DEFAULT 0,
 		    `gender` SMALLINT DEFAULT 0,
 			`credit` DECIMAL(16,2) DEFAULT 0,
 		    `gold` DECIMAL(16,2) DEFAULT 0,
@@ -653,7 +638,6 @@ class AccountMySQL (AccountBase):
 			`LoginTimes` INT DEFAULT 0,
 			`CreditConsumed` DECIMAL(16,2) DEFAULT 0,
 			`GoldConsumed` DECIMAL(16,2) DEFAULT 0,
-			`status` INT DEFAULT 0,
 			KEY(`cid`),
 			KEY(`name`),
 			KEY(`src`)
@@ -663,33 +647,6 @@ class AccountMySQL (AccountBase):
 		sql = sql.strip('\n')
 		sql += ' ENGINE=InnoDB DEFAULT CHARSET=utf8;'
 		return sql % database
-
-	# 旧表迁移（best-effort：失败只提示，不中断）
-	def __migrate (self, database):
-		alters = (
-			'ALTER TABLE `%s`.`account` ADD COLUMN `status` INT DEFAULT 0',
-			'ALTER TABLE `%s`.`account` MODIFY `urs` VARCHAR(88) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL',
-			'ALTER TABLE `%s`.`account` MODIFY `pass` VARCHAR(64) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL DEFAULT \'\'',
-			'ALTER TABLE `%s`.`account` MODIFY `credit` DECIMAL(16,2) DEFAULT 0',
-			'ALTER TABLE `%s`.`account` MODIFY `gold` DECIMAL(16,2) DEFAULT 0',
-			'ALTER TABLE `%s`.`account` MODIFY `CreditConsumed` DECIMAL(16,2) DEFAULT 0',
-			'ALTER TABLE `%s`.`account` MODIFY `GoldConsumed` DECIMAL(16,2) DEFAULT 0',
-		)
-		for sql in alters:
-			try:
-				c = self.__conn.cursor()
-				try:
-					c.execute(sql % database)
-				finally:
-					c.close()
-				self.__conn.commit()
-			except MySQLdb.Error as e:
-				try:
-					self.__conn.rollback()
-				except MySQLdb.Error:
-					pass
-				self.out('migrate skip: %s (%s)' % (sql.split('`account`')[0].strip(), e))
-		return True
 
 	# DECIMAL 读出来是 Decimal 类型，这里转成 float，与其他后端类型一致
 	def _record2obj (self, record):
