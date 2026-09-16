@@ -13,7 +13,7 @@
 # 1. 密码按传入值原样存储，哈希/加盐由外层决定，本模块不介入算法
 # 2. payment/deposit 的 money 必须是大于 0 的有限数字，按 2 位小数处理
 # 3. status: 0=正常, 1=封禁（封禁后禁止登录/支付/充值）
-# 4. mode: 0=login 时更新登录统计(LastLoginDate/ip)，非 0 只验证
+# 4. mode: 0=login 时更新登录统计(LastLoginDate/LoginTimes/ip)，非 0 只验证
 # 5. 三个后端行为对齐：字段表、错误码、大小写敏感比较、应用侧时间
 # 6. update() 不能修改密码（白名单不含 pass），改密码请用 passwd()
 #
@@ -43,6 +43,51 @@ if sys.version_info[0] >= 3:
 	unicode = str
 	long = int
 	xrange = range
+
+
+#----------------------------------------------------------------------
+# 字段说明（FIELDS 共 26 个，顺序与 SELECT * 一致）：
+#----------------------------------------------------------------------
+FIELDS_DESCRIPTION = '''
+  字段            类型      可update  含义与用法
+  --------------  --------  --------  --------------------------------
+  uid             INTEGER   否        用户唯一数字 ID，自增主键，系统生成
+  urs             VARCHAR   否        登录账号（唯一），注册时设定，login/query 的主键
+  cid             INTEGER   是        渠道/分类 ID，用于区分用户来源，可建索引筛选
+  name            VARCHAR   是        昵称/显示名
+  pass            VARCHAR   否*       密码，明文存储（哈希由外层负责），query 不返回，
+                                      只能通过 passwd() 修改
+  status          INTEGER   否        账户状态：0=正常 1=封禁，通过 ban()/unban() 修改，
+                                      login/payment/deposit 会检查，封禁后全部拒绝
+  gender          INTEGER   是        性别：0=未知 1=男 2=女
+  credit          REAL      否*       积分余额，通过 deposit()/payment() 增减，不能直接 update
+  gold            REAL      否*       金币余额，通过 deposit()/payment() 增减，不能直接 update
+  level           INTEGER   是        等级
+  exp             INTEGER   是        经验值
+  birthday        DATE      是        生日
+  icon            INTEGER   是        头像图标 ID（指向预设头像集）
+  mail            VARCHAR   是        邮箱
+  mobile          VARCHAR   是        手机号
+  sign            VARCHAR   是        个性签名
+  photo           VARCHAR   是        照片 URL / 路径
+  intro           VARCHAR   是        自我介绍
+  misc            TEXT      是        弹性扩展 JSON 槽，存放无查询需求的小数据（建议 ≤1KB）；
+                                      SQL 后端存 JSON 文本，Mongo 存原生对象；
+                                      需要 WHERE/索引的字段应"毕业"为真实列（如 status）
+  src             VARCHAR   是        注册来源标记
+  ip              VARCHAR   否        最后登录 IP，login() 自动写入
+  RegDate         DATETIME  否        注册时间，register() 自动写入
+  LastLoginDate   DATETIME  否        最后登录时间，login() 自动更新（mode=0 时）
+  LoginTimes      INTEGER   否        累计登录次数，login() 自动递增（mode=0 时）
+  CreditConsumed  REAL      否        credit 累计消耗，payment() 自动累加
+  GoldConsumed    REAL      否        gold 累计消耗，payment() 自动累加
+
+  * pass/credit/gold 虽不在 update() 白名单，但各有专用方法修改：
+    pass 用 passwd()，credit/gold 用 deposit()/payment()
+
+  "可update=是" 的字段可通过 update(uid, {字段: 值}) 修改；
+  "可update=否" 的字段由系统或专用方法维护，update() 会静默忽略。
+'''
 
 
 #----------------------------------------------------------------------
