@@ -165,3 +165,12 @@ pyrightconfig.json
 
 test_*.py
 
+/.qoder/*
+/.claude/*
+/.opencode/*
+/.iflow/*
+/.understand-anything/*
+/.pi/*
+/.zcode/*
+/.tmp/*
+/.temp/*
