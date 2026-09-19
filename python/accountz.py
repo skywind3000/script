@@ -33,6 +33,7 @@ except ImportError:
 	import simplejson as json
 
 MySQLdb = None
+_MySQLdb_is_pymysql = False		# True: 正在使用 PyMySQL 的 MySQLdb 兼容层
 pymongo = None
 
 
@@ -58,6 +59,14 @@ class AccountBase (object):
 
 	# 金额相关字段
 	MONEY_FIELDS = ( 'credit', 'gold', 'CreditConsumed', 'GoldConsumed' )
+
+	# 日期字段：对外 API 统一用字符串（与 sqlite 一致），mysql/mongo 内部转换。
+	# key=字段名，value=strftime 格式（birthday 只有日期，另两个含时分秒）
+	DATE_FIELDS = {
+		'birthday': '%Y-%m-%d',
+		'RegDate': '%Y-%m-%d %H:%M:%S',
+		'LastLoginDate': '%Y-%m-%d %H:%M:%S',
+	}
 
 	# update() 允许修改的字段（不含 pass，密码只能通过 passwd() 修改）
 	UPDATABLE = ( 'cid', 'name', 'gender', 'icon', 'mail', 'mobile',
@@ -131,6 +140,30 @@ class AccountBase (object):
 		if v is None:
 			return None
 		return json.dumps(v, ensure_ascii = False)
+
+	# 日期字段读出：数据库原生时间对象 -> 字符串（mysql/mongo 统一返回 str，
+	# 与 sqlite 对齐）。非时间对象（如已是 str 或 None）原样返回。
+	def _date_str (self, field, value):
+		if isinstance(value, (datetime.datetime, datetime.date)):
+			fmt = self.DATE_FIELDS.get(field, '%Y-%m-%d %H:%M:%S')
+			return value.strftime(fmt)
+		return value
+
+	# 日期字段写入：字符串 -> datetime（mongo 存储前内部转换；mysql 直接把 str
+	# 交给引擎解析，无需调用本方法）。None/非字符串原样返回；解析失败也原样
+	# 返回，避免脏数据导致崩溃。
+	def _date_obj (self, field, value):
+		if value is None or not isinstance(value, (str, unicode)):
+			return value
+		fmt = self.DATE_FIELDS.get(field)
+		fmts = (fmt, '%Y-%m-%d %H:%M:%S', '%Y-%m-%d') if fmt else \
+			('%Y-%m-%d %H:%M:%S', '%Y-%m-%d')
+		for f in fmts:
+			try:
+				return datetime.datetime.strptime(value, f)
+			except (ValueError, TypeError):
+				pass
+		return value
 
 
 #----------------------------------------------------------------------
@@ -510,12 +543,13 @@ class AccountLocal (AccountBase):
 # initialize MySQLdb
 #----------------------------------------------------------------------
 def mysql_init():
-	global MySQLdb
+	global MySQLdb, _MySQLdb_is_pymysql
 	if MySQLdb is not None:
 		return True
 	try:
 		import MySQLdb as _mysql
 		MySQLdb = _mysql
+		_MySQLdb_is_pymysql = False
 	except ImportError:
 		# 没装 mysqlclient 时退回 PyMySQL 的 MySQLdb 兼容层
 		try:
@@ -523,9 +557,23 @@ def mysql_init():
 			pymysql.install_as_MySQLdb()
 			import MySQLdb as _mysql
 			MySQLdb = _mysql
+			_MySQLdb_is_pymysql = True
 		except ImportError:
 			return False
 	return True
+
+
+# 线程安全装饰器：AccountMySQL 共用一个连接，pymysql/mysqlclient 的单连接
+# 并非线程安全（并发 execute/commit 会破坏协议状态）。用可重入锁把每个访问
+# 连接的方法整体串行化，语义与 AccountLocal 的 self.__lock 对齐。锁存放在
+# self._lock（单下划线，避免名字改写导致装饰器取不到）。
+def _locked(fn):
+	def wrapper(self, *args, **kwargs):
+		with self._lock:
+			return fn(self, *args, **kwargs)
+	wrapper.__name__ = fn.__name__
+	wrapper.__doc__ = fn.__doc__
+	return wrapper
 
 
 #----------------------------------------------------------------------
@@ -535,6 +583,7 @@ class AccountMySQL (AccountBase):
 
 	def __init__ (self, **argv):
 		AccountBase.__init__(self)
+		self._lock = threading.RLock()
 		self.__argv = {}
 		self.__uri = {}
 		for k, v in argv.items():
@@ -548,6 +597,24 @@ class AccountMySQL (AccountBase):
 		if 'db' not in argv:
 			raise KeyError('not find db name')
 		self.__open()
+
+	# 连接参数归一化：pymysql 兼容层把 passwd/db 视为弃用参数（会抛
+	# DeprecationWarning），需改用 password/database；原生 mysqlclient 则沿用
+	# passwd/db。按当前驱动（_MySQLdb_is_pymysql 标志）转换关键字，保证两种
+	# 驱动下都无告警且行为一致。
+	@staticmethod
+	def _connect_kwargs (uri):
+		if not _MySQLdb_is_pymysql:
+			return uri
+		out = {}
+		for k, v in uri.items():
+			if k == 'passwd':
+				out['password'] = v
+			elif k == 'db':
+				out['database'] = v
+			else:
+				out[k] = v
+		return out
 
 	def __open (self):
 		mysql_init()
@@ -567,11 +634,11 @@ class AccountMySQL (AccountBase):
 		self.__base = uri
 		self.__db = self.__argv.get('db', 'account')
 		if self.__argv.get('init', False):
-			self.__conn = MySQLdb.connect(**uri)
+			self.__conn = MySQLdb.connect(**self._connect_kwargs(uri))
 			return self.init()
 		uri = dict(uri)
 		uri['db'] = self.__db
-		self.__conn = MySQLdb.connect(**uri)
+		self.__conn = MySQLdb.connect(**self._connect_kwargs(uri))
 		return True
 
 	# 输出日志
@@ -604,7 +671,7 @@ class AccountMySQL (AccountBase):
 		self.__conn.close()
 		uri = dict(self.__base)
 		uri['db'] = database
-		self.__conn = MySQLdb.connect(**uri)
+		self.__conn = MySQLdb.connect(**self._connect_kwargs(uri))
 		return True
 
 	# 建表语句，urs/pass 用 utf8_bin（与 sqlite 的大小写敏感对齐），
@@ -648,13 +715,17 @@ class AccountMySQL (AccountBase):
 		sql += ' ENGINE=InnoDB DEFAULT CHARSET=utf8;'
 		return sql % database
 
-	# DECIMAL 读出来是 Decimal 类型，这里转成 float，与其他后端类型一致
+	# DECIMAL 读出来是 Decimal 类型转成 float；DATE/DATETIME 读出来是
+	# date/datetime 对象转成字符串，均与其他后端类型对齐
 	def _record2obj (self, record):
 		user = AccountBase._record2obj(self, record)
 		if user is not None:
 			for k in self.MONEY_FIELDS:
 				if isinstance(user.get(k), decimal.Decimal):
 					user[k] = float(user[k])
+			for k in self.DATE_FIELDS:
+				if k in user:
+					user[k] = self._date_str(k, user[k])
 		return user
 
 	# 关闭数据库连接
@@ -1029,6 +1100,17 @@ class AccountMySQL (AccountBase):
 		return succeed
 
 
+# 给 AccountMySQL 所有访问连接的方法统一套上 _locked：单连接非线程安全，
+# 需整体串行化（与 AccountLocal 的 self.__lock 语义对齐）。这里集中包裹，
+# 避免在十几个方法上逐个写装饰器。_cursor 在这些方法的锁内被调用，无需单独
+# 包裹；ban/unban 已包裹，其委托的 __set_status 也在锁内执行。
+for _name in ('init', 'close', 'login', 'query', 'register', 'update', 'passwd',
+		'payment', 'deposit', 'delete', 'count', 'list_users', 'ban',
+		'unban', 'population'):
+	setattr(AccountMySQL, _name, _locked(getattr(AccountMySQL, _name)))
+del _name
+
+
 #----------------------------------------------------------------------
 # initialize mongodb client
 #----------------------------------------------------------------------
@@ -1128,7 +1210,10 @@ class AccountMongo (AccountBase):
 		newobj = {}
 		for k in self._names:
 			if k != 'pass':
-				newobj[k] = obj.get(k, None)
+				v = obj.get(k, None)
+				if k in self.DATE_FIELDS:
+					v = self._date_str(k, v)	# datetime -> str，与 sqlite 对齐
+				newobj[k] = v
 		if '_id' in obj:
 			newobj['_id'] = obj['_id']
 		if newobj['uid'] is None:
@@ -1244,7 +1329,10 @@ class AccountMongo (AccountBase):
 		setting = {}
 		for name in self._updatable:
 			if name in changes:
-				setting[name] = changes[name]
+				v = changes[name]
+				if name in self.DATE_FIELDS:
+					v = self._date_obj(name, v)	# str -> datetime，存为 BSON 日期
+				setting[name] = v
 		if not setting:
 			return False
 		try:
