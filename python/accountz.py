@@ -1500,6 +1500,150 @@ class AccountMongo (AccountBase):
 
 
 #----------------------------------------------------------------------
+# populate_fake_data - 用 Faker 生成随机假账号，写入任意后端
+#----------------------------------------------------------------------
+def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN'):
+	'''用 Faker 生成 count 条随机账号，写入 db（AccountLocal/MySQL/Mongo 通用）。
+
+	数据分布（贴近真实用户形态，符合本次需求）：
+	  - RegDate    : 注册时间均匀分布在最近 10 年
+	  - LoginTimes : 1..3000 随机
+	  - 金额       : 约 15% 用户有 credit；其中约 85% < 1000，12% 在
+	                 1000..10000，3% 在 10000..50000（全部 <= 50000）。
+	                 有 credit 的用户里约 30% 额外再给一份 gold。
+	  - 其余字段（name/mail/mobile/birthday/intro/...）由 Faker 随机生成。
+
+	实现：账号创建走公共 API register()（顺带拿到自增 uid、跨后端一致），其余
+	字段（资料/金额/时间/ip）用一次底层 UPDATE 合并写入——批量生成对网络往返
+	敏感，这样比逐字段调用 update()/deposit() 快很多。RegDate/LastLoginDate/
+	LoginTimes/ip 本就不在 update() 白名单里。三端日期按本模块约定：对外 str，
+	内部各自存储（sqlite 存 str、mysql 存 DATETIME、mongo 存 BSON 日期）。
+
+	参数：
+	  db      : 已初始化（表已建好）的后端实例
+	  count   : 生成条数
+	  seed    : 随机种子，传整数则结果可复现
+	  verbose : True 时打印进度
+	  locale  : Faker 语言，默认 zh_CN（中文名/手机号）
+	返回：实际成功写入条数
+	'''
+	try:
+		from faker import Faker
+	except ImportError:
+		raise ImportError('populate_fake_data need faker package: pip install faker')
+	import random
+	rng = random.Random(seed)
+	fake = Faker(locale)
+	if seed is not None:
+		fake.seed_instance(seed)
+
+	is_local = isinstance(db, AccountLocal)
+	is_mysql = isinstance(db, AccountMySQL)
+	is_mongo = isinstance(db, AccountMongo)
+	if not (is_local or is_mysql or is_mongo):
+		raise TypeError('unsupported backend: %s' % type(db).__name__)
+
+	now = datetime.datetime.now()
+	ten_years = (365 * 10 + 2) * 86400.0	# 最近十年的秒数（含闰日）
+	run_tag = '%04x' % rng.randint(0, 0xffff)	# 每次运行不同，便于向已有库追加
+
+	# 金额分档：绝大多数小额，极少数大额，全部 <= 50000
+	def _money ():
+		r = rng.random()
+		if r < 0.85:
+			return round(rng.uniform(1, 1000), 2)
+		if r < 0.97:
+			return round(rng.uniform(1000, 10000), 2)
+		return round(rng.uniform(10000, 50000), 2)
+
+	def _clip (s, n):
+		if s is None:
+			return None
+		s = str(s)
+		return s if len(s) <= n else s[:n]
+
+	# 一次底层 UPDATE 写入全部剩余字段（资料/金额/时间/ip），省掉 update()/
+	# deposit() 的多次往返；批量生成对网络延迟敏感，register 已走 API 建号。
+	# fields 的键都是固定列名（非用户输入），值一律用参数绑定，无注入风险。
+	def _set_fields (uid, fields):
+		if is_mongo:
+			db._AccountMongo__account.update_one({'uid': uid}, {'$set': fields})
+			return
+		keys = list(fields.keys())
+		if is_local:
+			sql = 'UPDATE account SET ' + ', '.join(['%s = ?' % k for k in keys])
+			sql += ' WHERE uid = ?;'
+			conn = db._AccountLocal__conn
+			conn.execute(sql, tuple(fields.values()) + (uid,))
+			conn.commit()
+		else:
+			sql = 'UPDATE account SET ' + ', '.join(['%s = %%s' % k for k in keys])
+			sql += ' WHERE uid = %s;'
+			conn = db._AccountMySQL__conn
+			c = conn.cursor()
+			c.execute(sql, tuple(fields.values()) + (uid,))
+			conn.commit()
+			c.close()
+
+	succeed = 0
+	srcs = ('web', 'ios', 'android', 'invite', 'auto')
+	report = max(1, count // 20)
+	for i in range(count):
+		urs = '%s%s%d@%s' % (fake.user_name(), run_tag, i, fake.domain_name())
+		rec = db.register(urs, fake.password(length = 12),
+			_clip(fake.name(), 32), rng.randint(0, 2), rng.choice(srcs))
+		if not rec:
+			continue	# urs 撞库（极少），跳过
+		uid = rec['uid']
+		# 金额：约 15% 用户有 credit，其中约 30% 再给一份 gold（全部 <= 50000）
+		credit = gold = 0.0
+		if rng.random() < 0.15:
+			credit = _money()
+			if rng.random() < 0.30:
+				gold = _money()
+		# 注册时间（最近十年）、登录次数（1..3000）、最后登录（注册到现在之间）
+		reg_dt = (now - datetime.timedelta(seconds = rng.uniform(0, ten_years)))
+		reg_dt = reg_dt.replace(microsecond = 0)
+		times = rng.randint(1, 3000)
+		span = max(1.0, (now - reg_dt).total_seconds())
+		last_dt = (reg_dt + datetime.timedelta(seconds = rng.uniform(0, span)))
+		last_dt = last_dt.replace(microsecond = 0)
+		birth = fake.date_of_birth(minimum_age = 16, maximum_age = 80)
+		misc = {'tag': fake.word(), 'vip': rng.random() < 0.2,
+			'score': rng.randint(0, 1000)}
+		# 日期/misc 按后端准备取值：sqlite 全用 str；mysql 日期用原生对象、misc
+		# 用 json 文本；mongo 日期用 datetime、misc 用 dict（存 BSON 文档）
+		if is_mongo:
+			reg_v, last_v = reg_dt, last_dt
+			birth_v = datetime.datetime(birth.year, birth.month, birth.day)
+			misc_v = misc
+		else:
+			misc_v = db._misc_dump(misc)
+			birth_v = birth.strftime('%Y-%m-%d')
+			if is_local:
+				reg_v = reg_dt.strftime('%Y-%m-%d %H:%M:%S')
+				last_v = last_dt.strftime('%Y-%m-%d %H:%M:%S')
+			else:
+				reg_v, last_v = reg_dt, last_dt
+		_set_fields(uid, {
+			'cid': rng.randint(0, 200), 'icon': rng.randint(0, 64),
+			'level': rng.randint(0, 120), 'exp': rng.randint(0, 100000),
+			'birthday': birth_v, 'mail': _clip(fake.email(), 88),
+			'mobile': _clip(fake.phone_number(), 32),
+			'sign': _clip(fake.sentence(nb_words = 4), 32),
+			'photo': _clip(fake.image_url(), 256),
+			'intro': _clip(fake.text(max_nb_chars = 200), 256),
+			'misc': misc_v, 'credit': credit, 'gold': gold,
+			'RegDate': reg_v, 'LastLoginDate': last_v,
+			'LoginTimes': times, 'ip': fake.ipv4(),
+		})
+		succeed += 1
+		if verbose and (i + 1) % report == 0:
+			print('  populate_fake_data: %d/%d' % (i + 1, count))
+	return succeed
+
+
+#----------------------------------------------------------------------
 # testing
 #----------------------------------------------------------------------
 if __name__ == '__main__':
