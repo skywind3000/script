@@ -7,7 +7,7 @@
 #   python load_demo.py 10000 42     # 追加 10000 条，随机种子 42（结果可复现）
 # 说明:
 #   - init=True 自动建库建表；库/表已存在则复用，可反复运行以“追加”更多数据
-#   - populate_fake_data 每次运行用不同 run_tag，urs 不会与上次冲突
+#   - populate_fake_data 随机生成 urs（set 去重），撞库自动换号重试，可反复追加
 import sys, os, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

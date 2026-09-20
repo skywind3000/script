@@ -6,7 +6,7 @@
 # accountz.py - 账号存储：sqlite / mysql / mongo 三个后端
 #
 # Created by skywind on 2017/03/16
-# Last change: 2026/09/16 16:25:00
+# Last change: 2026/09/20 14:16:14
 #
 # 设计说明：
 # 
@@ -1502,16 +1502,34 @@ class AccountMongo (AccountBase):
 #----------------------------------------------------------------------
 # populate_fake_data - 用 Faker 生成随机假账号，写入任意后端
 #----------------------------------------------------------------------
-def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN'):
+def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN',
+	base_time = None):
 	'''用 Faker 生成 count 条随机账号，写入 db（AccountLocal/MySQL/Mongo 通用）。
 
-	数据分布（贴近真实用户形态，符合本次需求）：
-	  - RegDate    : 注册时间均匀分布在最近 10 年
-	  - LoginTimes : 1..3000 随机
+	数据分布（贴近真实用户形态）：
+	  - RegDate    : 注册日期均匀分布在最近 10 年，小时按权重重采样（凌晨少、
+	                 晚间高峰）
+	  - LoginTimes : 长尾分布且与账号年龄关联（日均不超过 3 次，封顶 3000）；
+	                 约 8% 用户注册后从未登录（LastLoginDate/ip 同为 NULL）
+	  - LastLoginDate: 60% 偏向近期（立方回退），40% 在生命周期内均匀（流失用户）
 	  - 金额       : 约 15% 用户有 credit；其中约 85% < 1000，12% 在
-	                 1000..10000，3% 在 10000..50000（全部 <= 50000）。
-	                 有 credit 的用户里约 30% 额外再给一份 gold。
-	  - 其余字段（name/mail/mobile/birthday/intro/...）由 Faker 随机生成。
+	                 1000..10000，3% 在 10000..50000（全部 <= 50000）。有 credit
+	                 的用户约 30% 额外再给一份 gold。有金额的用户大多带关联消费史
+	                 （CreditConsumed/GoldConsumed），另有约 5% 余额为 0 但消费史
+	                 非 0（钱花完了）
+	  - level/exp  : level 指数衰减（低等级为主，封顶 120），exp 由 level 推导，
+	                 两者自洽
+	  - birthday   : 由注册时间反推，保证注册时年满 16 岁，年龄集中在 18-35；
+	                 约 15% 用户未填写（NULL）
+	  - status     : 约 1.5% 账号被封禁（status=1），可覆盖封禁分支
+	  - 资料稀疏   : mail/mobile/sign/photo/intro 按各自概率为 NULL，避免人人
+	                 资料齐全；mail 填写时约 40% 与 urs 一致；photo 用站内相对
+	                 路径而非外部占位图
+	  - name/gender: gender 按权重生成（未知 10%/男 48%/女 42%），名字与性别对应
+	  - urs        : QQ 号 / 拼音昵称(+数字) 风格混合，set 去重 + 撞库重试，
+	                 无顺序号和随机标签痕迹
+	  - src/cid    : src 加权（android>ios>web>invite>wap），cid 与 src 关联
+	  - ip         : 公网 IPv4 为主，约 8% IPv6
 
 	实现：账号创建走公共 API register()（顺带拿到自增 uid、跨后端一致），其余
 	字段（资料/金额/时间/ip）用一次底层 UPDATE 合并写入——批量生成对网络往返
@@ -1525,6 +1543,8 @@ def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN
 	  seed    : 随机种子，传整数则结果可复现
 	  verbose : True 时打印进度
 	  locale  : Faker 语言，默认 zh_CN（中文名/手机号）
+	  base_time : 基准时间（datetime），默认 datetime.now()；与 seed 一起传
+	              固定值可让时间字段也严格可复现
 	返回：实际成功写入条数
 	'''
 	try:
@@ -1543,9 +1563,18 @@ def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN
 	if not (is_local or is_mysql or is_mongo):
 		raise TypeError('unsupported backend: %s' % type(db).__name__)
 
-	now = datetime.datetime.now()
+	now = base_time if base_time is not None else datetime.datetime.now()
 	ten_years = (365 * 10 + 2) * 86400.0	# 最近十年的秒数（含闰日）
-	run_tag = '%04x' % rng.randint(0, 0xffff)	# 每次运行不同，便于向已有库追加
+
+	# 按权重随机挑一个下标
+	def _pick (weights):
+		r = rng.random() * sum(weights)
+		total = 0
+		for i, w in enumerate(weights):
+			total += w
+			if r < total:
+				return i
+		return len(weights) - 1
 
 	# 金额分档：绝大多数小额，极少数大额，全部 <= 50000
 	def _money ():
@@ -1556,11 +1585,75 @@ def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN
 			return round(rng.uniform(1000, 10000), 2)
 		return round(rng.uniform(10000, 50000), 2)
 
+	# 升到 level 所需累计经验（exp 由此推导，保证 level/exp 自洽）
+	def _exp_base (level):
+		return 10 * level * level
+
+	# 注册时年龄：16-17/18-25/26-35/36-50/51-64 按权重，主力 18-35
+	def _reg_age ():
+		i = _pick((5, 35, 35, 20, 5))
+		return rng.randint((16, 18, 26, 36, 51)[i], (17, 25, 35, 50, 64)[i])
+
+	# 注册小时权重（0-23 点）：凌晨低谷，20-21 点高峰
+	HOUR_WEIGHTS = (1, 1, 1, 1, 1, 2, 2, 3, 4, 5, 5, 5, 6, 6, 5, 5, 5, 5,
+		7, 8, 9, 9, 8, 5)
+
+	# 截断超长字符串。str/unicode 不调 str()：py2 下 str(unicode 中文)
+	# 会抛 UnicodeEncodeError
 	def _clip (s, n):
 		if s is None:
 			return None
-		s = str(s)
+		if not isinstance(s, (str, unicode)):
+			s = str(s)
 		return s if len(s) <= n else s[:n]
+
+	# 公网 IPv4：Faker 的 ipv4() 会产出私网/保留段，过滤掉
+	def _public_ipv4 ():
+		for _ in range(32):
+			ip = fake.ipv4()
+			try:
+				a, b = [int(x) for x in ip.split('.')[:2]]
+			except ValueError:
+				continue
+			if a in (0, 10, 127) or a >= 224:
+				continue
+			if a == 100 and 64 <= b <= 127:
+				continue
+			if a == 169 and b == 254:
+				continue
+			if a == 172 and 16 <= b <= 31:
+				continue
+			if a == 192 and b == 168:
+				continue
+			return ip
+		return '203.0.113.%d' % rng.randint(2, 254)	# 兜底：文档保留段
+
+	# 登录 ip：公网 IPv4 为主，约 8% IPv6（ip 列宽 70 就是给 IPv6 留的）
+	def _ip ():
+		if rng.random() < 0.08:
+			return fake.ipv6()
+		return _public_ipv4()
+
+	# 常见邮箱域名（zh_CN 场景）
+	DOMAINS = ('qq.com', '163.com', '126.com', 'gmail.com', 'sina.com',
+		'sohu.com', 'foxmail.com', '139.com', 'outlook.com', 'hotmail.com')
+
+	# urs：QQ 号 / 拼音昵称(+数字) 风格混合，贴近真实注册账号形态
+	def _gen_urs ():
+		r = rng.random()
+		if r < 0.35:
+			return '%d@qq.com' % rng.randint(10000000, 3499999999)
+		name = fake.user_name()
+		if r < 0.75:
+			name = '%s%d' % (name, rng.randint(1, 9999))
+		return '%s@%s' % (_clip(name, 60), rng.choice(DOMAINS))
+
+	# 注册渠道：加权（android 为主），cid 与渠道关联
+	SRCS = (('android', 40), ('ios', 25), ('web', 20), ('invite', 8), ('wap', 7))
+
+	def _gen_src ():
+		i = _pick([w for _, w in SRCS])
+		return (SRCS[i][0], i)
 
 	# 一次底层 UPDATE 写入全部剩余字段（资料/金额/时间/ip），省掉 update()/
 	# deposit() 的多次往返；批量生成对网络延迟敏感，register 已走 API 建号。
@@ -1586,60 +1679,137 @@ def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN
 			c.close()
 
 	succeed = 0
-	srcs = ('web', 'ios', 'android', 'invite', 'auto')
+	attempts = 0
+	seen = set()
+	max_attempts = count * 3 + 100	# urs 生成/撞库重试上限
 	report = max(1, count // 20)
-	for i in range(count):
-		urs = '%s%s%d@%s' % (fake.user_name(), run_tag, i, fake.domain_name())
+	while succeed < count and attempts < max_attempts:
+		attempts += 1
+		urs = _gen_urs()
+		if urs in seen:
+			continue
+		seen.add(urs)
+		# gender 按权重（0=未知/1=男/2=女），名字与性别对应；locale 没有
+		# 分性别接口时退回 fake.name()
+		gender = _pick((10, 48, 42))
+		if gender == 1 and hasattr(fake, 'name_male'):
+			name = fake.name_male()
+		elif gender == 2 and hasattr(fake, 'name_female'):
+			name = fake.name_female()
+		else:
+			name = fake.name()
+		src, srci = _gen_src()
 		rec = db.register(urs, fake.password(length = 12),
-			_clip(fake.name(), 32), rng.randint(0, 2), rng.choice(srcs))
+			_clip(name, 32), gender, src)
 		if not rec:
-			continue	# urs 撞库（极少），跳过
+			continue	# urs 与库内已有数据撞库，换一个重试
 		uid = rec['uid']
-		# 金额：约 15% 用户有 credit，其中约 30% 再给一份 gold（全部 <= 50000）
-		credit = gold = 0.0
-		if rng.random() < 0.15:
+		# 注册时间：日期在最近十年内均匀，小时按权重重采样；若抽到今天且
+		# 小时在未来，则退回最近 24 小时内随机
+		reg_dt = now - datetime.timedelta(seconds = rng.uniform(0, ten_years))
+		reg_dt = reg_dt.replace(microsecond = 0, hour = 0, minute = 0, second = 0)
+		reg_dt += datetime.timedelta(hours = _pick(HOUR_WEIGHTS),
+			minutes = rng.randint(0, 59), seconds = rng.randint(0, 59))
+		if reg_dt > now:
+			reg_dt = now - datetime.timedelta(seconds = rng.uniform(0, 86400))
+			reg_dt = reg_dt.replace(microsecond = 0)
+		span = max(1.0, (now - reg_dt).total_seconds())
+		# 登录统计：约 8% 注册后从未登录；其余登录次数长尾分布并按账号年龄
+		# 封顶（日均不超过 3 次）；最后登录 60% 偏向近期、40% 生命周期内均匀
+		never = rng.random() < 0.08
+		if never:
+			times, last_dt = 0, None
+		else:
+			cap = min(3000, max(1, int(span / 86400)) * 3 + 1)
+			times = min(cap, 1 + int(rng.expovariate(1.0 / 100)))
+			if rng.random() < 0.4:
+				back = span * rng.random()		# 流失用户：生命周期内随机
+			else:
+				back = span * rng.random() ** 3	# 活跃用户：偏向近期
+			last_dt = now - datetime.timedelta(seconds = back)
+			last_dt = last_dt.replace(microsecond = 0)
+		# 生日：由注册时间反推（保证注册时年满 16 岁），约 15% 未填写
+		birth = None
+		if rng.random() >= 0.15:
+			days = _reg_age() * 365.25 + rng.uniform(0, 365)
+			birth = (reg_dt - datetime.timedelta(days = days)).date()
+		# 等级指数衰减（低等级为主），exp 由 level 推导，两者自洽
+		level = min(120, int(rng.expovariate(1.0 / 12)))
+		exp = _exp_base(level) + rng.randint(0,
+			max(1, _exp_base(level + 1) - _exp_base(level) - 1))
+		# 金额：约 15% 有 credit（其中约 30% 再给 gold），大多带关联消费史；
+		# 另有约 5% 余额为 0 但消费史非 0（充的钱花完了）
+		credit = gold = credit_spent = gold_spent = 0.0
+		r = rng.random()
+		if r < 0.15:
 			credit = _money()
+			if rng.random() < 0.7:
+				credit_spent = round(credit * rng.uniform(0.2, 3.0), 2)
 			if rng.random() < 0.30:
 				gold = _money()
-		# 注册时间（最近十年）、登录次数（1..3000）、最后登录（注册到现在之间）
-		reg_dt = (now - datetime.timedelta(seconds = rng.uniform(0, ten_years)))
-		reg_dt = reg_dt.replace(microsecond = 0)
-		times = rng.randint(1, 3000)
-		span = max(1.0, (now - reg_dt).total_seconds())
-		last_dt = (reg_dt + datetime.timedelta(seconds = rng.uniform(0, span)))
-		last_dt = last_dt.replace(microsecond = 0)
-		birth = fake.date_of_birth(minimum_age = 16, maximum_age = 80)
-		misc = {'tag': fake.word(), 'vip': rng.random() < 0.2,
-			'score': rng.randint(0, 1000)}
+				if rng.random() < 0.7:
+					gold_spent = round(gold * rng.uniform(0.2, 3.0), 2)
+		elif r < 0.20:
+			credit_spent = _money()
+		# vip 与消费关联：有余额或消费史的用户一半是 vip，其余仅 2%；
+		# score 与 level 关联
+		spender = (credit + gold + credit_spent + gold_spent) > 0
+		misc = {'tag': fake.word(),
+			'vip': rng.random() < (0.5 if spender else 0.02),
+			'score': min(1000, level * 8 + rng.randint(0, 120))}
+		# mail：10% 未填；填了的 40% 直接用 urs（真实场景常见）
+		if rng.random() < 0.10:
+			mail = None
+		elif rng.random() < 0.40:
+			mail = urs
+		else:
+			mail = _clip(fake.email(), 88)
+		mobile = None if rng.random() < 0.20 else _clip(fake.phone_number(), 32)
+		sign = None if rng.random() < 0.50 else _clip(fake.sentence(nb_words = 4), 32)
+		# photo：站内相对路径（外部占位图 URL 太假），40% 未上传头像
+		photo = None if rng.random() < 0.40 else \
+			'/avatar/%04d/%08d_%d.jpg' % (uid % 10000, uid, rng.randint(1, 3))
+		# intro：60% 未填，其余多为短句、少数长文
+		if rng.random() < 0.60:
+			intro = None
+		elif rng.random() < 0.70:
+			intro = _clip(fake.sentence(nb_words = rng.randint(3, 10)), 256)
+		else:
+			intro = _clip(fake.text(max_nb_chars = rng.randint(60, 200)), 256)
+		# 约 1.5% 封禁账号，让 login/payment/deposit 的封禁分支可测
+		status = 1 if rng.random() < 0.015 else 0
+		cid = srci * 50 + rng.randint(0, 49)	# cid 与 src 渠道关联
 		# 日期/misc 按后端准备取值：sqlite 全用 str；mysql 日期用原生对象、misc
-		# 用 json 文本；mongo 日期用 datetime、misc 用 dict（存 BSON 文档）
+		# 用 json 文本；mongo 日期用 datetime、misc 用 dict（存 BSON 文档）；
+		# 未填写的字段保持 None（存为 NULL）
 		if is_mongo:
 			reg_v, last_v = reg_dt, last_dt
-			birth_v = datetime.datetime(birth.year, birth.month, birth.day)
+			birth_v = datetime.datetime(birth.year, birth.month, birth.day) \
+				if birth is not None else None
 			misc_v = misc
 		else:
 			misc_v = db._misc_dump(misc)
-			birth_v = birth.strftime('%Y-%m-%d')
+			birth_v = birth.strftime('%Y-%m-%d') if birth is not None else None
 			if is_local:
 				reg_v = reg_dt.strftime('%Y-%m-%d %H:%M:%S')
-				last_v = last_dt.strftime('%Y-%m-%d %H:%M:%S')
+				last_v = last_dt.strftime('%Y-%m-%d %H:%M:%S') \
+					if last_dt is not None else None
 			else:
 				reg_v, last_v = reg_dt, last_dt
 		_set_fields(uid, {
-			'cid': rng.randint(0, 200), 'icon': rng.randint(0, 64),
-			'level': rng.randint(0, 120), 'exp': rng.randint(0, 100000),
-			'birthday': birth_v, 'mail': _clip(fake.email(), 88),
-			'mobile': _clip(fake.phone_number(), 32),
-			'sign': _clip(fake.sentence(nb_words = 4), 32),
-			'photo': _clip(fake.image_url(), 256),
-			'intro': _clip(fake.text(max_nb_chars = 200), 256),
-			'misc': misc_v, 'credit': credit, 'gold': gold,
+			'cid': cid, 'icon': rng.randint(0, 64),
+			'level': level, 'exp': exp,
+			'birthday': birth_v, 'mail': mail, 'mobile': mobile,
+			'sign': sign, 'photo': photo, 'intro': intro,
+			'misc': misc_v, 'status': status,
+			'credit': credit, 'gold': gold,
+			'CreditConsumed': credit_spent, 'GoldConsumed': gold_spent,
 			'RegDate': reg_v, 'LastLoginDate': last_v,
-			'LoginTimes': times, 'ip': fake.ipv4(),
+			'LoginTimes': times, 'ip': None if never else _ip(),
 		})
 		succeed += 1
-		if verbose and (i + 1) % report == 0:
-			print('  populate_fake_data: %d/%d' % (i + 1, count))
+		if verbose and succeed % report == 0:
+			print('  populate_fake_data: %d/%d' % (succeed, count))
 	return succeed
 
 
