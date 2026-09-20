@@ -6,7 +6,7 @@
 # accountz.py - 账号存储：sqlite / mysql / mongo 三个后端
 #
 # Created by skywind on 2017/03/16
-# Last change: 2026/09/20 14:16:14
+# Last change: 2026/09/20 15:21:51
 #
 # 设计说明：
 # 
@@ -1202,6 +1202,7 @@ class AccountMongo (AccountBase):
 		account = self.__account
 		account.create_index([('uid', 1)], unique = True)
 		account.create_index([('urs', 1)], unique = True)
+		account.create_index([('cid', 1)])
 		account.create_index([('name', 1)])
 		return True
 
