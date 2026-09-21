@@ -23,6 +23,13 @@
 # 8. 表级约束：status/gender 值域、金额与登录次数非负，DDL 内置 CHECK
 #    （MySQL 8.0.16 之前会解析但忽略 CHECK，属预期行为）
 # 9. 时间字段以机房所在时区的本地时间为准，不存 UTC
+# 10. 数值/状态列一律 NOT NULL DEFAULT 0（cid/status/gender/credit/gold/
+#     level/exp/icon/LoginTimes/CreditConsumed/GoldConsumed），RegDate 也是
+#     NOT NULL。NULL 会打穿 SQL 三值逻辑（LoginTimes+1、credit>=? 全变 NULL），
+#     也会污染 SUM()/AVG() 统计口径；NULL status 还会被当成「未封禁」。
+#     cid 是「外部指定的外部 uid」（非自增、非渠道号），BIGINT，0=未绑定。
+#     真正的可选资料（birthday/mail/mobile/sign/photo/intro/misc/ip/
+#     LastLoginDate/src）保持可空——NULL 与空串语义不同
 # 注意：老的 DECIMAL(元)/REAL(元) 库必须先做金额迁移（×100 取整成整数分），
 #       迁移 SQL 见文件末尾注释，否则新旧单位混用会算错 100 倍
 #
@@ -68,6 +75,12 @@ class AccountBase (object):
 
 	# 金额相关字段
 	MONEY_FIELDS = ( 'credit', 'gold', 'CreditConsumed', 'GoldConsumed' )
+
+	# NOT NULL DEFAULT 0 的整数字段：三端统一「缺失即 0」，不允许 NULL。
+	# cid 是外部指定的外部 uid（非自增、非渠道号），0 表示未绑定。
+	# uid 不在此列（mongo 由自增序列提供，SQL 端是主键）。
+	ZERO_FIELDS = ( 'cid', 'status', 'gender', 'credit', 'gold', 'level',
+		'exp', 'icon', 'LoginTimes', 'CreditConsumed', 'GoldConsumed' )
 
 	# 日期字段：对外 API 统一用字符串（与 sqlite 一致），mysql/mongo 内部转换。
 	# key=字段名，value=strftime 格式（birthday 只有日期，另两个含时分秒）
@@ -196,17 +209,17 @@ class AccountLocal (AccountBase):
 		CREATE TABLE IF NOT EXISTS "account" (
 		    "uid" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL UNIQUE,
 		    "urs" VARCHAR(88) NOT NULL UNIQUE,
-		    "cid" INTEGER DEFAULT (0),
+		    "cid" BIGINT NOT NULL DEFAULT (0),
 		    "name" VARCHAR(32) NOT NULL DEFAULT(''),			
 		    "pass" VARCHAR(98) NOT NULL DEFAULT(''),
-			"status" INTEGER DEFAULT (0) CHECK ("status" IS NULL OR "status" IN (0, 1)),
-		    "gender" INTEGER DEFAULT (0) CHECK ("gender" IS NULL OR "gender" IN (0, 1, 2)),
-			"credit" BIGINT DEFAULT (0) CHECK ("credit" IS NULL OR "credit" >= 0),
-		    "gold" BIGINT DEFAULT (0) CHECK ("gold" IS NULL OR "gold" >= 0),
-		    "level" INTEGER DEFAULT (0),
-			"exp" INTEGER DEFAULT (0),
+			"status" INTEGER NOT NULL DEFAULT (0) CHECK ("status" IN (0, 1)),
+		    "gender" INTEGER NOT NULL DEFAULT (0) CHECK ("gender" IN (0, 1, 2)),
+			"credit" BIGINT NOT NULL DEFAULT (0) CHECK ("credit" >= 0),
+		    "gold" BIGINT NOT NULL DEFAULT (0) CHECK ("gold" >= 0),
+		    "level" INTEGER NOT NULL DEFAULT (0),
+			"exp" INTEGER NOT NULL DEFAULT (0),
 			"birthday" DATE,
-		    "icon" INTEGER DEFAULT (0),
+		    "icon" INTEGER NOT NULL DEFAULT (0),
 		    "mail" VARCHAR(88),
 		    "mobile" VARCHAR(32), 
 			"sign" VARCHAR(32),
@@ -215,11 +228,11 @@ class AccountLocal (AccountBase):
 			"misc" TEXT,
 			"src" VARCHAR(16),
 			"ip" VARCHAR(70),
-		    "RegDate" DATETIME,
+		    "RegDate" DATETIME NOT NULL,
 		    "LastLoginDate" DATETIME,
-			"LoginTimes" INTEGER DEFAULT (0) CHECK ("LoginTimes" IS NULL OR "LoginTimes" >= 0),
-			"CreditConsumed" BIGINT DEFAULT (0) CHECK ("CreditConsumed" IS NULL OR "CreditConsumed" >= 0),
-			"GoldConsumed" BIGINT DEFAULT (0) CHECK ("GoldConsumed" IS NULL OR "GoldConsumed" >= 0)
+			"LoginTimes" INTEGER NOT NULL DEFAULT (0) CHECK ("LoginTimes" >= 0),
+			"CreditConsumed" BIGINT NOT NULL DEFAULT (0) CHECK ("CreditConsumed" >= 0),
+			"GoldConsumed" BIGINT NOT NULL DEFAULT (0) CHECK ("GoldConsumed" >= 0)
 		);
 		CREATE INDEX IF NOT EXISTS "account_cid" ON account (cid);
 		CREATE INDEX IF NOT EXISTS "account_name" ON account (name);
@@ -689,23 +702,24 @@ class AccountMySQL (AccountBase):
 		return True
 
 	# 建表语句，urs/pass 用 utf8_bin（与 sqlite 的大小写敏感对齐），
-	# 金额用 BIGINT 存整数分、uid 用 BIGINT（与 sqlite/mongo 的 64 位对齐）
+	# 金额用 BIGINT 存整数分、uid/cid 用 BIGINT（与 sqlite/mongo 的 64 位对齐）；
+	# 数值/状态列一律 NOT NULL DEFAULT 0（cid 是外部指定的外部 uid，0=未绑定）
 	def __table_sql (self, database):
 		sql = '''
 			CREATE TABLE IF NOT EXISTS `%s`.`account` (
 		    `uid` BIGINT PRIMARY KEY NOT NULL AUTO_INCREMENT,
 		    `urs` VARCHAR(88) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL UNIQUE KEY,
-		    `cid` INT DEFAULT 0,
+		    `cid` BIGINT NOT NULL DEFAULT 0,
 		    `name` VARCHAR(32) NOT NULL DEFAULT '',			
 		    `pass` VARCHAR(98) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL DEFAULT '',
-			`status` INT DEFAULT 0 CHECK (`status` IS NULL OR `status` IN (0, 1)),
-		    `gender` SMALLINT DEFAULT 0 CHECK (`gender` IS NULL OR `gender` IN (0, 1, 2)),
-			`credit` BIGINT DEFAULT 0 CHECK (`credit` IS NULL OR `credit` >= 0),
-		    `gold` BIGINT DEFAULT 0 CHECK (`gold` IS NULL OR `gold` >= 0),
-		    `level` INT DEFAULT 0,
-			`exp` INT DEFAULT 0,
+			`status` INT NOT NULL DEFAULT 0 CHECK (`status` IN (0, 1)),
+		    `gender` SMALLINT NOT NULL DEFAULT 0 CHECK (`gender` IN (0, 1, 2)),
+			`credit` BIGINT NOT NULL DEFAULT 0 CHECK (`credit` >= 0),
+		    `gold` BIGINT NOT NULL DEFAULT 0 CHECK (`gold` >= 0),
+		    `level` INT NOT NULL DEFAULT 0,
+			`exp` INT NOT NULL DEFAULT 0,
 			`birthday` DATE,
-		    `icon` INT DEFAULT 0,
+		    `icon` INT NOT NULL DEFAULT 0,
 		    `mail` VARCHAR(88),
 		    `mobile` VARCHAR(32), 
 			`sign` VARCHAR(32),			
@@ -714,11 +728,11 @@ class AccountMySQL (AccountBase):
 			`misc` TEXT,
 			`src` VARCHAR(16),
 			`ip` VARCHAR(70),
-		    `RegDate` DATETIME,
+		    `RegDate` DATETIME NOT NULL,
 		    `LastLoginDate` DATETIME,
-			`LoginTimes` INT DEFAULT 0 CHECK (`LoginTimes` IS NULL OR `LoginTimes` >= 0),
-			`CreditConsumed` BIGINT DEFAULT 0 CHECK (`CreditConsumed` IS NULL OR `CreditConsumed` >= 0),
-			`GoldConsumed` BIGINT DEFAULT 0 CHECK (`GoldConsumed` IS NULL OR `GoldConsumed` >= 0),
+			`LoginTimes` INT NOT NULL DEFAULT 0 CHECK (`LoginTimes` >= 0),
+			`CreditConsumed` BIGINT NOT NULL DEFAULT 0 CHECK (`CreditConsumed` >= 0),
+			`GoldConsumed` BIGINT NOT NULL DEFAULT 0 CHECK (`GoldConsumed` >= 0),
 			KEY(`cid`),
 			KEY(`name`)
 			)
@@ -1233,10 +1247,13 @@ class AccountMongo (AccountBase):
 				newobj[k] = v
 		if '_id' in obj:
 			newobj['_id'] = obj['_id']
+		# uid 与 ZERO_FIELDS 在 SQL 端都是 NOT NULL DEFAULT 0：mongo 没有
+		# schema，缺字段/存了 null 时在这里统一补 0，保证三端读出值一致
 		if newobj['uid'] is None:
 			newobj['uid'] = 0
-		if newobj['status'] is None:
-			newobj['status'] = 0
+		for k in self.ZERO_FIELDS:
+			if newobj.get(k) is None:
+				newobj[k] = 0
 		return newobj
 
 	# 自增量
@@ -1545,7 +1562,8 @@ def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN
 	  - name/gender: gender 按权重生成（未知 10%/男 48%/女 42%），名字与性别对应
 	  - urs        : QQ 号 / 拼音昵称(+数字) 风格混合，set 去重 + 撞库重试，
 	                 无顺序号和随机标签痕迹
-	  - src/cid    : src 加权（android>ios>web>invite>wap），cid 与 src 关联
+	  - src/cid    : src 加权（android>ios>web>invite>wap）；cid 是外部指定的
+	                 外部 uid，约 1/4 账号给随机外部号，其余 0（未绑定）
 	  - ip         : 公网 IPv4 为主，约 8% IPv6
 
 	实现：账号创建走公共 API register()（顺带拿到自增 uid、跨后端一致），其余
@@ -1799,7 +1817,7 @@ def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN
 			intro = _clip(fake.text(max_nb_chars = rng.randint(60, 200)), 256)
 		# 约 1.5% 封禁账号，让 login/payment/deposit 的封禁分支可测
 		status = 1 if rng.random() < 0.015 else 0
-		cid = srci * 50 + rng.randint(0, 49)	# cid 与 src 渠道关联
+		cid = rng.randint(100000000, 999999999) if rng.random() < 0.25 else 0	# 外部 uid，0=未绑定
 		# 日期/misc 按后端准备取值：sqlite 全用 str；mysql 日期用原生对象、misc
 		# 用 json 文本；mongo 日期用 datetime、misc 用 dict（存 BSON 文档）；
 		# 未填写的字段保持 None（存为 NULL）
@@ -1973,3 +1991,61 @@ if __name__ == '__main__':
 #          });
 #          db.account.replaceOne({_id: d._id}, d);
 #      });
+
+#
+# ---- 第二批改造：NOT NULL / cid 改 BIGINT ----------------------------------
+# 数值/状态列改为 NOT NULL DEFAULT 0，RegDate 改为 NOT NULL，cid 由 INT 改为
+# BIGINT（cid 是外部指定的外部 uid，0=未绑定）。老库要先回填、再去掉可空：
+#
+# 1) sqlite：SQLite 不支持给已有列加 NOT NULL，只能重建表。最省事的做法——
+#      ALTER TABLE account RENAME TO account_old;
+#      -- 然后用新版代码打开一次库（自动建出带 NOT NULL 的新表），再执行：
+#      INSERT INTO account (uid, urs, cid, name, pass, status, gender, credit,
+#              gold, level, exp, birthday, icon, mail, mobile, sign, photo,
+#              intro, misc, src, ip, RegDate, LastLoginDate, LoginTimes,
+#              CreditConsumed, GoldConsumed)
+#        SELECT uid, urs, IFNULL(cid, 0), name, pass, IFNULL(status, 0),
+#              IFNULL(gender, 0), IFNULL(credit, 0), IFNULL(gold, 0),
+#              IFNULL(level, 0), IFNULL(exp, 0), birthday, IFNULL(icon, 0),
+#              mail, mobile, sign, photo, intro, misc, src, ip,
+#              IFNULL(RegDate, '1970-01-01 00:00:00'), LastLoginDate,
+#              IFNULL(LoginTimes, 0), IFNULL(CreditConsumed, 0),
+#              IFNULL(GoldConsumed, 0)
+#          FROM account_old;
+#      DROP TABLE account_old;
+#    （uid 显式写入，AUTOINCREMENT 序列会自动跟上；索引由新表建表语句重建）
+#
+# 2) mysql：先回填 NULL 再改列（严格模式下带 NULL 直接 ALTER 会失败）：
+#      UPDATE `account` SET
+#          `cid`            = IFNULL(`cid`, 0),
+#          `status`         = IFNULL(`status`, 0),
+#          `gender`         = IFNULL(`gender`, 0),
+#          `credit`         = IFNULL(`credit`, 0),
+#          `gold`           = IFNULL(`gold`, 0),
+#          `level`          = IFNULL(`level`, 0),
+#          `exp`            = IFNULL(`exp`, 0),
+#          `icon`           = IFNULL(`icon`, 0),
+#          `LoginTimes`     = IFNULL(`LoginTimes`, 0),
+#          `CreditConsumed` = IFNULL(`CreditConsumed`, 0),
+#          `GoldConsumed`   = IFNULL(`GoldConsumed`, 0),
+#          `RegDate`        = IFNULL(`RegDate`, NOW());
+#      ALTER TABLE `account`
+#          MODIFY `cid` BIGINT NOT NULL DEFAULT 0,
+#          MODIFY `status` INT NOT NULL DEFAULT 0,
+#          MODIFY `gender` SMALLINT NOT NULL DEFAULT 0,
+#          MODIFY `credit` BIGINT NOT NULL DEFAULT 0,
+#          MODIFY `gold` BIGINT NOT NULL DEFAULT 0,
+#          MODIFY `level` INT NOT NULL DEFAULT 0,
+#          MODIFY `exp` INT NOT NULL DEFAULT 0,
+#          MODIFY `icon` INT NOT NULL DEFAULT 0,
+#          MODIFY `LoginTimes` INT NOT NULL DEFAULT 0,
+#          MODIFY `CreditConsumed` BIGINT NOT NULL DEFAULT 0,
+#          MODIFY `GoldConsumed` BIGINT NOT NULL DEFAULT 0,
+#          MODIFY `RegDate` DATETIME NOT NULL;
+#    注意：CHECK 约束同样是 CREATE TABLE 时才写入，旧表不会自动补；
+#    需要就让新版代码重建表，或 MySQL 8.0.16+ 手工 ADD CONSTRAINT。
+#
+# 3) mongo：无 schema、不需要 DDL。读取侧已由 __obj_complete 把缺失/None 的
+#    ZERO_FIELDS 统一补 0（写入侧 register/_set_fields 本来就写 0）。若要强约束
+#    可加 $jsonSchema validator（Mongo 3.6+），但它不追溯已有文档，需自行
+#    updateMany 把 null 改成 0。
