@@ -6,7 +6,13 @@
 # accountz.py - 账号存储：sqlite / mysql / mongo 三个后端
 #
 # Created by skywind on 2017/03/16
-# Last change: 2026/09/20 15:21:51
+# Last change: 2026/09/21 15:09:16
+#
+# 重要字段说明：
+#
+# - uid: 整数 64 位自增量，内部用户唯一标识
+# - urs: 用户字符串唯一标识，一般是用户的登录名
+# - cid: 外部 uid，帮忙存储外部用户数据库的整数主键，方便做数据关联
 #
 # 设计说明：
 # 
@@ -30,8 +36,10 @@
 #     cid 是「外部指定的外部 uid」（非自增、非渠道号），BIGINT，0=未绑定。
 #     真正的可选资料（birthday/mail/mobile/sign/photo/intro/misc/ip/
 #     LastLoginDate/src）保持可空——NULL 与空串语义不同
-# 注意：老的 DECIMAL(元)/REAL(元) 库必须先做金额迁移（×100 取整成整数分），
-#       迁移 SQL 见文件末尾注释，否则新旧单位混用会算错 100 倍
+# 11. uid/cid 三端统一为 int64（有符号 64 位）：sqlite 的 INTEGER 本身就是
+#     64 位，mysql 用 BIGINT；超出值域的 uid/cid 参数一律拒绝；mongo 写入侧
+#     显式转 bson.Int64（pymongo 默认把 int32 范围内的整数存成 Int32，不转
+#     的话存储类型与另两端不一致），自增计数器同样用 Int64
 #
 #======================================================================
 from __future__ import print_function
@@ -51,6 +59,7 @@ except ImportError:
 MySQLdb = None
 _MySQLdb_is_pymysql = False		# True: 正在使用 PyMySQL 的 MySQLdb 兼容层
 pymongo = None
+bson = None
 
 
 #----------------------------------------------------------------------
@@ -81,6 +90,13 @@ class AccountBase (object):
 	# uid 不在此列（mongo 由自增序列提供，SQL 端是主键）。
 	ZERO_FIELDS = ( 'cid', 'status', 'gender', 'credit', 'gold', 'level',
 		'exp', 'icon', 'LoginTimes', 'CreditConsumed', 'GoldConsumed' )
+
+	# 统一按 int64（有符号 64 位整数）处理的字段：sqlite 的 INTEGER 本身就是
+	# 64 位，mysql 用 BIGINT；mongo 写入前需显式转 bson.Int64（pymongo 会把
+	# int32 范围内的整数编码成 Int32）。超出值域的参数一律拒绝。
+	INT64_FIELDS = ( 'uid', 'cid' )
+	INT64_MIN = -(2 ** 63)
+	INT64_MAX = 2 ** 63 - 1
 
 	# 日期字段：对外 API 统一用字符串（与 sqlite 一致），mysql/mongo 内部转换。
 	# key=字段名，value=strftime 格式（birthday 只有日期，另两个含时分秒）
@@ -124,13 +140,19 @@ class AccountBase (object):
 	# 识别账号标识：int -> ('uid', 值)，str -> ('urs', 值)，无效 -> None
 	# 注意 bool 是 int 的子类，True 会被当作 uid=1，这里显式拒绝
 	def _identify (self, uid):
-		if isinstance(uid, bool):
-			return None
-		if isinstance(uid, (int, long)):
+		if self._is_int64(uid):
 			return ('uid', uid)
 		if isinstance(uid, (str, unicode)):
 			return ('urs', uid)
 		return None
+
+	# 是否为合法 int64 整数（bool 不算，超出 64 位值域的 int 也不算）：
+	# uid/cid 三端统一按 int64 处理，超界值直接拒绝，避免 sqlite 绑定溢出、
+	# mysql 截断告警、mongo 存成任意精度长整型三种不一致的失败方式
+	def _is_int64 (self, v):
+		if isinstance(v, bool) or not isinstance(v, (int, long)):
+			return False
+		return self.INT64_MIN <= v <= self.INT64_MAX
 
 	# 数据库记录转字典（SQL 后端按列位置），misc 为 json 文本时解码，
 	# 解码失败时保留原始字符串，避免脏数据无声丢失
@@ -294,6 +316,8 @@ class AccountLocal (AccountBase):
 	def query (self, urs = None, uid = None):
 		if urs is None and uid is None:
 			return None
+		if uid is not None and not self._is_int64(uid):
+			return None		# uid 按 int64 处理，超界/非法类型视为无此用户
 		with self.__lock:
 			c = self.__conn.cursor()
 			try:
@@ -338,6 +362,8 @@ class AccountLocal (AccountBase):
 			if k not in self._updatable:
 				continue
 			v = changes[k]
+			if k in self.INT64_FIELDS and not self._is_int64(v):
+				return False	# cid 等 int64 字段非法值，整体拒绝
 			if k == 'misc' and v is not None:
 				v = self._misc_dump(v)
 			names.append(k)
@@ -406,8 +432,8 @@ class AccountLocal (AccountBase):
 			return error
 		kind = kind.lower()
 		money = int(money)		# 单位：分（_money_error 已保证是整数）
-		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
-			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
+		if not self._is_int64(uid):
+			return (-1, 0, 'uid must be int64: %s' % (repr(uid),))
 		if kind == 'credit':
 			x1, x2 = 'credit', 'CreditConsumed'
 		else:
@@ -441,8 +467,8 @@ class AccountLocal (AccountBase):
 			return error
 		kind = kind.lower()
 		money = int(money)		# 单位：分（_money_error 已保证是整数）
-		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
-			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
+		if not self._is_int64(uid):
+			return (-1, 0, 'uid must be int64: %s' % (repr(uid),))
 		sql = ('UPDATE account SET %s = %s + ? '
 			'WHERE uid = ? and IFNULL(status, 0) = 0;')
 		sql = sql % (kind, kind)
@@ -818,6 +844,8 @@ class AccountMySQL (AccountBase):
 	def query (self, urs = None, uid = None):
 		if urs is None and uid is None:
 			return None
+		if uid is not None and not self._is_int64(uid):
+			return None		# uid 按 int64 处理，超界/非法类型视为无此用户
 		record = None
 		try:
 			c = self._cursor()
@@ -869,6 +897,8 @@ class AccountMySQL (AccountBase):
 			if k not in self._updatable:
 				continue
 			v = changes[k]
+			if k in self.INT64_FIELDS and not self._is_int64(v):
+				return False	# cid 等 int64 字段非法值，整体拒绝
 			if k == 'misc' and v is not None:
 				v = self._misc_dump(v)
 			names.append(k)
@@ -948,8 +978,8 @@ class AccountMySQL (AccountBase):
 			return error
 		kind = kind.lower()
 		money = int(money)		# 单位：分（_money_error 已保证是整数）
-		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
-			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
+		if not self._is_int64(uid):
+			return (-1, 0, 'uid must be int64: %s' % (repr(uid),))
 		if kind == 'credit':
 			x1, x2 = 'credit', 'CreditConsumed'
 		else:
@@ -990,8 +1020,8 @@ class AccountMySQL (AccountBase):
 			return error
 		kind = kind.lower()
 		money = int(money)		# 单位：分（_money_error 已保证是整数）
-		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
-			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
+		if not self._is_int64(uid):
+			return (-1, 0, 'uid must be int64: %s' % (repr(uid),))
 		sql = ('UPDATE account SET %s = %s + %%s '
 			'WHERE uid = %%s and IFNULL(status, 0) = 0;')
 		sql = sql % (kind, kind)
@@ -1142,12 +1172,14 @@ del _name
 # initialize mongodb client
 #----------------------------------------------------------------------
 def pymongo_init():
-	global pymongo
+	global pymongo, bson
 	if pymongo is not None:
 		return True
 	try:
 		import pymongo as _pymongo
+		import bson as _bson
 		pymongo = _pymongo
+		bson = _bson
 	except ImportError:
 		return False
 	return True
@@ -1256,16 +1288,28 @@ class AccountMongo (AccountBase):
 				newobj[k] = 0
 		return newobj
 
-	# 自增量
+	# 自增量（用 Int64 增量，计数器字段也保持 64 位，与 uid 口径一致）
 	def __id_auto_increment (self, name):
 		seqs = self.__seqs
 		cc = seqs.find_one_and_update(
 			{'_id': name},
-			{'$inc': {'next': 1}},
+			{'$inc': {'next': bson.Int64(1)}},
 			{'next': True},
 			return_document = pymongo.ReturnDocument.AFTER,
 			upsert = True)
 		return cc.get('next', 1)
+
+	# 写入前把字典里的 uid/cid 统一转成 bson.Int64：pymongo 默认把 int32
+	# 范围内的整数编码成 Int32，显式转 Int64 才与 mysql BIGINT / sqlite
+	# INTEGER（64 位）的存储类型对齐
+	def __int64_fix (self, obj):
+		if bson is None:
+			pymongo_init()	# 兜底：正常路径 __open() 已加载 bson
+		for k in self.INT64_FIELDS:
+			v = obj.get(k, None)
+			if isinstance(v, (int, long)) and not isinstance(v, bool):
+				obj[k] = bson.Int64(v)
+		return obj
 
 	# 登录，输入用户名和密码，返回用户数据
 	# passwd 为 None 且 force=False 时返回 None（拒绝无密码登录）
@@ -1303,6 +1347,8 @@ class AccountMongo (AccountBase):
 	def query (self, urs = None, uid = None):
 		if urs is None and uid is None:
 			return None
+		if uid is not None and not self._is_int64(uid):
+			return None		# uid 按 int64 处理，超界/非法类型视为无此用户
 		account = self.__account
 		try:
 			if urs is not None and uid is None:
@@ -1345,6 +1391,7 @@ class AccountMongo (AccountBase):
 		cc['GoldConsumed'] = 0
 		cc['status'] = 0
 		cc['RegDate'] = datetime.datetime.now()
+		self.__int64_fix(cc)		# uid/cid 以 BSON Int64 存储
 		try:
 			account.insert_one(cc)
 		except (pymongo.errors.DuplicateKeyError, pymongo.errors.PyMongoError):
@@ -1366,6 +1413,12 @@ class AccountMongo (AccountBase):
 				v = changes[name]
 				if name in self.DATE_FIELDS:
 					v = self._date_obj(name, v)	# str -> datetime，存为 BSON 日期
+				elif name in self.INT64_FIELDS:
+					# cid 等 int64 字段：先校验值域，再以 BSON Int64 存储
+					# （pymongo 默认把 int32 范围内的整数编码成 Int32）
+					if not self._is_int64(v):
+						return False
+					v = bson.Int64(v)
 				setting[name] = v
 		if not setting:
 			return False
@@ -1413,8 +1466,8 @@ class AccountMongo (AccountBase):
 			return error
 		kind = kind.lower()
 		money = int(money)		# 单位：分（_money_error 已保证是整数）
-		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
-			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
+		if not self._is_int64(uid):
+			return (-1, 0, 'uid must be int64: %s' % (repr(uid),))
 		inc = {}
 		if kind == 'credit':
 			inc['credit'] = -money
@@ -1447,8 +1500,8 @@ class AccountMongo (AccountBase):
 			return error
 		kind = kind.lower()
 		money = int(money)		# 单位：分（_money_error 已保证是整数）
-		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
-			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
+		if not self._is_int64(uid):
+			return (-1, 0, 'uid must be int64: %s' % (repr(uid),))
 		query = {'uid': uid, 'status': {'$in': [0, None]}}
 		hh = None
 		try:
@@ -1699,6 +1752,7 @@ def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN
 	# fields 的键都是固定列名（非用户输入），值一律用参数绑定，无注入风险。
 	def _set_fields (uid, fields):
 		if is_mongo:
+			db._AccountMongo__int64_fix(fields)	# cid 以 BSON Int64 存储
 			db._AccountMongo__account.update_one({'uid': uid}, {'$set': fields})
 			return
 		keys = list(fields.keys())
@@ -1949,103 +2003,3 @@ if __name__ == '__main__':
 		# print('population: %d'%db.population())
 		return 0
 	test1()
-
-
-#----------------------------------------------------------------------
-# 旧库迁移：金额从「元（小数）」换算成「整数分」
-#----------------------------------------------------------------------
-# 改造前的库金额存的是「元」（sqlite REAL / mysql DECIMAL(16,2) / mongo
-# double），升级到整数分之前必须先换算，否则新旧单位混用会差 100 倍。
-# 下面三个迁移都只能跑一次（跑两遍会再放大 100 倍），执行前务必备份！
-#
-# 1) sqlite（备份 accountz.db 后用 sqlite3 执行）：
-#      UPDATE account SET
-#          credit         = CAST(ROUND(IFNULL(credit, 0) * 100) AS INTEGER),
-#          gold           = CAST(ROUND(IFNULL(gold, 0) * 100) AS INTEGER),
-#          CreditConsumed = CAST(ROUND(IFNULL(CreditConsumed, 0) * 100) AS INTEGER),
-#          GoldConsumed   = CAST(ROUND(IFNULL(GoldConsumed, 0) * 100) AS INTEGER);
-#    列类型不必改（BIGINT 在 sqlite 就是 INTEGER 亲和性）；CHECK 约束只在
-#    建表时写入，老库想要约束需自行重建表。
-#
-# 2) mysql（mysqldump 备份后执行；先 UPDATE 再 MODIFY，DECIMAL 里已经是分，
-#    转 BIGINT 直接取整）：
-#      UPDATE `account` SET
-#          `credit`         = ROUND(IFNULL(`credit`, 0) * 100),
-#          `gold`           = ROUND(IFNULL(`gold`, 0) * 100),
-#          `CreditConsumed` = ROUND(IFNULL(`CreditConsumed`, 0) * 100),
-#          `GoldConsumed`   = ROUND(IFNULL(`GoldConsumed`, 0) * 100);
-#      ALTER TABLE `account`
-#          MODIFY `uid` BIGINT NOT NULL AUTO_INCREMENT,
-#          MODIFY `pass` VARCHAR(98) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL DEFAULT '',
-#          MODIFY `credit` BIGINT DEFAULT 0,
-#          MODIFY `gold` BIGINT DEFAULT 0,
-#          MODIFY `CreditConsumed` BIGINT DEFAULT 0,
-#          MODIFY `GoldConsumed` BIGINT DEFAULT 0;
-#    索引口径统一为 cid/name（可选）：
-#      ALTER TABLE `account` DROP INDEX `src`, ADD INDEX `cid` (`cid`), ADD INDEX `name` (`name`);
-#
-# 3) mongo（mongodump 备份后在 mongosh 里执行）：
-#      db.account.find({}).forEach(function (d) {
-#          ['credit', 'gold', 'CreditConsumed', 'GoldConsumed'].forEach(function (k) {
-#              if (typeof d[k] === 'number') { d[k] = Math.round(d[k] * 100); }
-#          });
-#          db.account.replaceOne({_id: d._id}, d);
-#      });
-
-#
-# ---- 第二批改造：NOT NULL / cid 改 BIGINT ----------------------------------
-# 数值/状态列改为 NOT NULL DEFAULT 0，RegDate 改为 NOT NULL，cid 由 INT 改为
-# BIGINT（cid 是外部指定的外部 uid，0=未绑定）。老库要先回填、再去掉可空：
-#
-# 1) sqlite：SQLite 不支持给已有列加 NOT NULL，只能重建表。最省事的做法——
-#      ALTER TABLE account RENAME TO account_old;
-#      -- 然后用新版代码打开一次库（自动建出带 NOT NULL 的新表），再执行：
-#      INSERT INTO account (uid, urs, cid, name, pass, status, gender, credit,
-#              gold, level, exp, birthday, icon, mail, mobile, sign, photo,
-#              intro, misc, src, ip, RegDate, LastLoginDate, LoginTimes,
-#              CreditConsumed, GoldConsumed)
-#        SELECT uid, urs, IFNULL(cid, 0), name, pass, IFNULL(status, 0),
-#              IFNULL(gender, 0), IFNULL(credit, 0), IFNULL(gold, 0),
-#              IFNULL(level, 0), IFNULL(exp, 0), birthday, IFNULL(icon, 0),
-#              mail, mobile, sign, photo, intro, misc, src, ip,
-#              IFNULL(RegDate, '1970-01-01 00:00:00'), LastLoginDate,
-#              IFNULL(LoginTimes, 0), IFNULL(CreditConsumed, 0),
-#              IFNULL(GoldConsumed, 0)
-#          FROM account_old;
-#      DROP TABLE account_old;
-#    （uid 显式写入，AUTOINCREMENT 序列会自动跟上；索引由新表建表语句重建）
-#
-# 2) mysql：先回填 NULL 再改列（严格模式下带 NULL 直接 ALTER 会失败）：
-#      UPDATE `account` SET
-#          `cid`            = IFNULL(`cid`, 0),
-#          `status`         = IFNULL(`status`, 0),
-#          `gender`         = IFNULL(`gender`, 0),
-#          `credit`         = IFNULL(`credit`, 0),
-#          `gold`           = IFNULL(`gold`, 0),
-#          `level`          = IFNULL(`level`, 0),
-#          `exp`            = IFNULL(`exp`, 0),
-#          `icon`           = IFNULL(`icon`, 0),
-#          `LoginTimes`     = IFNULL(`LoginTimes`, 0),
-#          `CreditConsumed` = IFNULL(`CreditConsumed`, 0),
-#          `GoldConsumed`   = IFNULL(`GoldConsumed`, 0),
-#          `RegDate`        = IFNULL(`RegDate`, NOW());
-#      ALTER TABLE `account`
-#          MODIFY `cid` BIGINT NOT NULL DEFAULT 0,
-#          MODIFY `status` INT NOT NULL DEFAULT 0,
-#          MODIFY `gender` SMALLINT NOT NULL DEFAULT 0,
-#          MODIFY `credit` BIGINT NOT NULL DEFAULT 0,
-#          MODIFY `gold` BIGINT NOT NULL DEFAULT 0,
-#          MODIFY `level` INT NOT NULL DEFAULT 0,
-#          MODIFY `exp` INT NOT NULL DEFAULT 0,
-#          MODIFY `icon` INT NOT NULL DEFAULT 0,
-#          MODIFY `LoginTimes` INT NOT NULL DEFAULT 0,
-#          MODIFY `CreditConsumed` BIGINT NOT NULL DEFAULT 0,
-#          MODIFY `GoldConsumed` BIGINT NOT NULL DEFAULT 0,
-#          MODIFY `RegDate` DATETIME NOT NULL;
-#    注意：CHECK 约束同样是 CREATE TABLE 时才写入，旧表不会自动补；
-#    需要就让新版代码重建表，或 MySQL 8.0.16+ 手工 ADD CONSTRAINT。
-#
-# 3) mongo：无 schema、不需要 DDL。读取侧已由 __obj_complete 把缺失/None 的
-#    ZERO_FIELDS 统一补 0（写入侧 register/_set_fields 本来就写 0）。若要强约束
-#    可加 $jsonSchema validator（Mongo 3.6+），但它不追溯已有文档，需自行
-#    updateMany 把 null 改成 0。
