@@ -61,15 +61,51 @@
 
 ### 2.2 account（瘦身版）
 
-从现有 account 表剥离全部业务字段：
+最终形态 DDL（MySQL，utf8mb4，时间统一 UTC）：
 
-- **删除**：`level` `exp` `icon` `sign` `intro` `photo` `credit` `gold`
-  `CreditConsumed` `GoldConsumed`，以及整个 `payment()/deposit()` 体系
-  （余额与消费流水属于各业务方或独立的钱包/支付服务）
-- **保留**：`uid` `pass` `name` `gender` `birthday` `mail` `mobile`
-  `status` `src` `ip` `RegDate` `LastLoginDate` `LoginTimes` `misc`
-- **废弃**：`urs` 列（登录名迁到 `identifiers` 表）、`cid` 列
-  （外部 uid 的语义被 per-app open_id 取代）
+```sql
+CREATE TABLE account (
+    uid           BIGINT PRIMARY KEY AUTO_INCREMENT,
+    pass          VARCHAR(98) NOT NULL DEFAULT '',   -- argon2id 哈希（服务端统一算法）
+    name          VARCHAR(32) NOT NULL DEFAULT '',   -- 昵称
+    status        TINYINT NOT NULL DEFAULT 0,        -- 见下方值域
+    gender        TINYINT NOT NULL DEFAULT 0 CHECK (gender IN (0, 1, 2)),
+    birthday      DATE,
+    mail          VARCHAR(88),                       -- 联系邮箱（登录用邮箱在 identifiers）
+    mobile        VARCHAR(32),                       -- 联系手机（登录用手机在 identifiers）
+    src           VARCHAR(16),                       -- 注册来源产品 app_id
+    reg_ip        VARCHAR(70),                       -- 注册 ip（支持 IPv6）
+    last_ip       VARCHAR(70),                       -- 最近登录 ip
+    reg_date      DATETIME NOT NULL,                 -- 注册时间（UTC）
+    last_login    DATETIME,                          -- 最近登录时间（UTC）
+    login_times   BIGINT NOT NULL DEFAULT 0 CHECK (login_times >= 0),
+    mfa_enabled   TINYINT NOT NULL DEFAULT 0,        -- 0=未开启 1=TOTP
+    mfa_secret    VARCHAR(64),                       -- TOTP 密钥（加密存储）
+    realname      TINYINT NOT NULL DEFAULT 0,        -- 实名状态 0=未认证 1=成年 2=未成年
+    misc          TEXT,                              -- JSON 扩展字段
+    version       BIGINT NOT NULL DEFAULT 0,         -- 乐观锁：敏感变更 +1，token 校验可带版本
+    updated_at    DATETIME NOT NULL                  -- 最近修改时间（UTC）
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+要点说明：
+
+- **urs/cid 列废弃**：登录名迁到 `identifiers`；外部 uid 语义被 per-app
+  `open_id` 取代
+- **mail/mobile 双轨**：account 表存"联系方式"（找回密码、通知用），
+  identifiers 表存"能否用它登录"（verified=1 才行）；两者独立演进，
+  换绑手机不影响登录标识，反之亦然
+- **ip 拆成 reg_ip/last_ip**：注册 ip 有风控与审计价值，不应被登录覆盖
+- **realname**：游戏防沉迷依赖实名状态（具体实名数据对接第三方，
+  这里只存结论），成年/未成年直接影响各游戏的宵禁与充值限额策略
+- **mfa_***：TOTP 二步验证的落点，服务内部产品和高价值账号可开启
+- **version**：改密/封禁/MFA 变更时 +1；已签发的 JWT 里带签发时的
+  version，校验时发现库中 version 更新则拒绝——实现"改密即踢下线"
+  而不必维护全量 token 黑名单
+- 沿用现有设计的合理部分：pass 列宽 98（容纳 argon2id 哈希）、
+  gender CHECK 值域、login_times 非负约束、misc 存 JSON 文本
+- 列名统一小写下划线（现表的 `RegDate/LastLoginDate/LoginTimes` 混用
+  驼峰，趁 schema 重做时归一）
 
 `status` 值域扩展（现在的 0/1 太窄）：
 
