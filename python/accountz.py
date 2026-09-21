@@ -1,12 +1,12 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 #  vim: set ts=4 sw=4 tw=0 noet :
-#======================================================================
+#=====================================================================
 #
 # accountz.py - 账号存储：sqlite / mysql / mongo 三个后端
 #
 # Created by skywind on 2017/03/16
-# Last change: 2026/09/21 15:09:16
+# Last change: 2026/09/21 15:18:23
 #
 # 重要字段说明：
 #
@@ -15,12 +15,12 @@
 # - cid: 外部 uid，帮忙存储外部用户数据库的整数主键，方便做数据关联
 #
 # 设计说明：
-# 
+#
 # 1. 密码按传入值原样存储，哈希/加盐由外层决定，本模块不介入算法；
 #    pass 列宽 98，可容纳 bcrypt(60) / argon2id(约 96) 等常见哈希串
-# 2. 金额一律以「整数分」记账（BIGINT，1 元 = 100 分），模块内不做小数
-#    运算，读出即为分；payment/deposit 的 money 也必须是整数分且大于 0，
-#    应用层自己 /100 转成元来显示
+# 2. 金额一律以「整数分」记账（BIGINT，1 元 = 100 分），模块内不做
+#    小数运算，读出即为分；payment/deposit 的 money 也必须是整数分
+#    且大于 0，应用层自己 /100 转成元来显示
 # 3. status: 0=正常, 1=封禁（封禁后禁止登录/支付/充值）
 # 4. mode: 0/登录时更新统计(LastLoginDate/LoginTimes/ip)，非 0 只验证
 # 5. 三个后端行为对齐：字段表、错误码、大小写敏感比较、应用侧时间
@@ -29,19 +29,21 @@
 # 8. 表级约束：status/gender 值域、金额与登录次数非负，DDL 内置 CHECK
 #    （MySQL 8.0.16 之前会解析但忽略 CHECK，属预期行为）
 # 9. 时间字段以机房所在时区的本地时间为准，不存 UTC
-# 10. 数值/状态列一律 NOT NULL DEFAULT 0（cid/status/gender/credit/gold/
-#     level/exp/icon/LoginTimes/CreditConsumed/GoldConsumed），RegDate 也是
-#     NOT NULL。NULL 会打穿 SQL 三值逻辑（LoginTimes+1、credit>=? 全变 NULL），
-#     也会污染 SUM()/AVG() 统计口径；NULL status 还会被当成「未封禁」。
-#     cid 是「外部指定的外部 uid」（非自增、非渠道号），BIGINT，0=未绑定。
-#     真正的可选资料（birthday/mail/mobile/sign/photo/intro/misc/ip/
+# 10. 数值/状态列一律 NOT NULL DEFAULT 0（cid/status/gender/credit/
+#     gold/level/exp/icon/LoginTimes/CreditConsumed/GoldConsumed），
+#     RegDate 也是 NOT NULL。NULL 会打穿 SQL 三值逻辑（LoginTimes+1、
+#     credit>=? 全变 NULL），也会污染 SUM()/AVG() 统计口径；NULL
+#     status 还会被当成「未封禁」。cid 是「外部指定的外部 uid」
+#     （非自增、非渠道号），BIGINT，0=未绑定。真正的可选资料
+#     （birthday/mail/mobile/sign/photo/intro/misc/ip/
 #     LastLoginDate/src）保持可空——NULL 与空串语义不同
-# 11. uid/cid 三端统一为 int64（有符号 64 位）：sqlite 的 INTEGER 本身就是
-#     64 位，mysql 用 BIGINT；超出值域的 uid/cid 参数一律拒绝；mongo 写入侧
-#     显式转 bson.Int64（pymongo 默认把 int32 范围内的整数存成 Int32，不转
-#     的话存储类型与另两端不一致），自增计数器同样用 Int64
+# 11. uid/cid 三端统一为 int64（有符号 64 位）：sqlite 的 INTEGER
+#     本身就是 64 位，mysql 用 BIGINT；超出值域的 uid/cid 参数一律
+#     拒绝；mongo 写入侧显式转 bson.Int64（pymongo 默认把 int32
+#     范围内的整数存成 Int32，不转的话存储类型与另两端不一致），
+#     自增计数器同样用 Int64
 #
-#======================================================================
+#=====================================================================
 from __future__ import print_function
 import sys
 import time
@@ -2002,4 +2004,7 @@ if __name__ == '__main__':
 		# print(db.passwd(uid, None, '1234'))
 		# print('population: %d'%db.population())
 		return 0
-	test1()
+	def test4():
+		print('hello world')
+	test4()
+
