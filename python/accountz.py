@@ -10,12 +10,21 @@
 #
 # 设计说明：
 # 
-# 1. 密码按传入值原样存储，哈希/加盐由外层决定，本模块不介入算法
-# 2. payment/deposit 的 money 必须是大于 0 的有限数字，按 2 位小数处理
+# 1. 密码按传入值原样存储，哈希/加盐由外层决定，本模块不介入算法；
+#    pass 列宽 98，可容纳 bcrypt(60) / argon2id(约 96) 等常见哈希串
+# 2. 金额一律以「整数分」记账（BIGINT，1 元 = 100 分），模块内不做小数
+#    运算，读出即为分；payment/deposit 的 money 也必须是整数分且大于 0，
+#    应用层自己 /100 转成元来显示
 # 3. status: 0=正常, 1=封禁（封禁后禁止登录/支付/充值）
 # 4. mode: 0/登录时更新统计(LastLoginDate/LoginTimes/ip)，非 0 只验证
 # 5. 三个后端行为对齐：字段表、错误码、大小写敏感比较、应用侧时间
 # 6. update() 不能修改密码（白名单不含 pass），改密码请用 passwd()
+# 7. 索引三端统一为 cid / name（另加 uid/urs 唯一），不再建 src 索引
+# 8. 表级约束：status/gender 值域、金额与登录次数非负，DDL 内置 CHECK
+#    （MySQL 8.0.16 之前会解析但忽略 CHECK，属预期行为）
+# 9. 时间字段以机房所在时区的本地时间为准，不存 UTC
+# 注意：老的 DECIMAL(元)/REAL(元) 库必须先做金额迁移（×100 取整成整数分），
+#       迁移 SQL 见文件末尾注释，否则新旧单位混用会算错 100 倍
 #
 #======================================================================
 from __future__ import print_function
@@ -80,7 +89,8 @@ class AccountBase (object):
 			self._names[v] = i
 		self._updatable = set(self.UPDATABLE)
 
-	# 检查金额参数，无错误返回 None，有错误返回 (-1, 0, 原因) 元组
+	# 检查金额参数（单位：分，必须是非 0 整数），无错误返回 None，
+	# 有错误返回 (-1, 0, 原因) 元组
 	def _money_error (self, kind, money):
 		if not isinstance(kind, (str, unicode)):
 			return (-1, 0, 'money kind must be a string: %s' % (repr(kind),))
@@ -91,6 +101,9 @@ class AccountBase (object):
 		if isinstance(money, float):
 			if money != money or money == float('inf') or money == float('-inf'):
 				return (-1, 0, 'money must be a finite number: %s' % (money,))
+		if money != int(money):
+			# 金额单位是「分」：30.5 这类小数要拒绝，不能被当成 30.5 分
+			return (-1, 0, 'money must be integer cents: %s' % (money,))
 		if money <= 0:
 			return (-1, 0, 'money must be positive: %s' % (money,))
 		return None
@@ -185,11 +198,11 @@ class AccountLocal (AccountBase):
 		    "urs" VARCHAR(88) NOT NULL UNIQUE,
 		    "cid" INTEGER DEFAULT (0),
 		    "name" VARCHAR(32) NOT NULL DEFAULT(''),			
-		    "pass" VARCHAR(64) NOT NULL DEFAULT(''),
-			"status" INTEGER DEFAULT (0),
-		    "gender" INTEGER DEFAULT (0),
-			"credit" REAL DEFAULT (0),
-		    "gold" REAL DEFAULT (0),
+		    "pass" VARCHAR(98) NOT NULL DEFAULT(''),
+			"status" INTEGER DEFAULT (0) CHECK ("status" IS NULL OR "status" IN (0, 1)),
+		    "gender" INTEGER DEFAULT (0) CHECK ("gender" IS NULL OR "gender" IN (0, 1, 2)),
+			"credit" BIGINT DEFAULT (0) CHECK ("credit" IS NULL OR "credit" >= 0),
+		    "gold" BIGINT DEFAULT (0) CHECK ("gold" IS NULL OR "gold" >= 0),
 		    "level" INTEGER DEFAULT (0),
 			"exp" INTEGER DEFAULT (0),
 			"birthday" DATE,
@@ -204,11 +217,12 @@ class AccountLocal (AccountBase):
 			"ip" VARCHAR(70),
 		    "RegDate" DATETIME,
 		    "LastLoginDate" DATETIME,
-			"LoginTimes" INTEGER DEFAULT (0),
-			"CreditConsumed" REAL DEFAULT (0),
-			"GoldConsumed" REAL DEFAULT (0)
+			"LoginTimes" INTEGER DEFAULT (0) CHECK ("LoginTimes" IS NULL OR "LoginTimes" >= 0),
+			"CreditConsumed" BIGINT DEFAULT (0) CHECK ("CreditConsumed" IS NULL OR "CreditConsumed" >= 0),
+			"GoldConsumed" BIGINT DEFAULT (0) CHECK ("GoldConsumed" IS NULL OR "GoldConsumed" >= 0)
 		);
-		CREATE INDEX IF NOT EXISTS "account_3" ON account (cid);
+		CREATE INDEX IF NOT EXISTS "account_cid" ON account (cid);
+		CREATE INDEX IF NOT EXISTS "account_name" ON account (name);
 		'''
 
 		# timeout 即 sqlite busy_timeout（秒），多线程/多进程防止 database is locked
@@ -370,7 +384,7 @@ class AccountLocal (AccountBase):
 					return False
 			return True
 
-	# 支付钱，kind为 'credit'或 'gold'，money是需要支付的钱数（必须大于0）
+	# 支付钱，kind为 'credit'或 'gold'，money是需要支付的钱数（单位：分，必须是大于 0 的整数）
 	# 返回 (结果, 还有多少钱, 错误原因)
 	# 结果=0支付成功，1用户不存在，2钱不够，3未知错误，4账户封禁，-1参数错误
 	def payment (self, uid, kind, money):
@@ -378,14 +392,14 @@ class AccountLocal (AccountBase):
 		if error is not None:
 			return error
 		kind = kind.lower()
-		money = round(money, 2)
+		money = int(money)		# 单位：分（_money_error 已保证是整数）
 		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
 			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
 		if kind == 'credit':
 			x1, x2 = 'credit', 'CreditConsumed'
 		else:
 			x1, x2 = 'gold', 'GoldConsumed'
-		sql = ('UPDATE account SET %s = round(%s - ?, 2), %s = round(%s + ?, 2) '
+		sql = ('UPDATE account SET %s = %s - ?, %s = %s + ? '
 			'WHERE uid = ? and %s >= ? and IFNULL(status, 0) = 0;')
 		sql = sql % (x1, x1, x2, x2, x1)
 		with self.__lock:
@@ -407,16 +421,16 @@ class AccountLocal (AccountBase):
 			return (3, data[x1], 'unknow payment error')
 		return (0, data[x1], 'ok')
 
-	# 存钱，kind为 'credit'或 'gold'，money是需要增加的钱数（必须大于0）
+	# 存钱，kind为 'credit'或 'gold'，money是需要增加的钱数（单位：分，必须是大于 0 的整数）
 	def deposit (self, uid, kind, money):
 		error = self._money_error(kind, money)
 		if error is not None:
 			return error
 		kind = kind.lower()
-		money = round(money, 2)
+		money = int(money)		# 单位：分（_money_error 已保证是整数）
 		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
 			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
-		sql = ('UPDATE account SET %s = round(%s + ?, 2) '
+		sql = ('UPDATE account SET %s = %s + ? '
 			'WHERE uid = ? and IFNULL(status, 0) = 0;')
 		sql = sql % (kind, kind)
 		with self.__lock:
@@ -675,19 +689,19 @@ class AccountMySQL (AccountBase):
 		return True
 
 	# 建表语句，urs/pass 用 utf8_bin（与 sqlite 的大小写敏感对齐），
-	# 金额用 DECIMAL 精确存储
+	# 金额用 BIGINT 存整数分、uid 用 BIGINT（与 sqlite/mongo 的 64 位对齐）
 	def __table_sql (self, database):
 		sql = '''
 			CREATE TABLE IF NOT EXISTS `%s`.`account` (
-		    `uid` INT PRIMARY KEY NOT NULL AUTO_INCREMENT,
+		    `uid` BIGINT PRIMARY KEY NOT NULL AUTO_INCREMENT,
 		    `urs` VARCHAR(88) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL UNIQUE KEY,
 		    `cid` INT DEFAULT 0,
 		    `name` VARCHAR(32) NOT NULL DEFAULT '',			
-		    `pass` VARCHAR(64) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL DEFAULT '',
-			`status` INT DEFAULT 0,
-		    `gender` SMALLINT DEFAULT 0,
-			`credit` DECIMAL(16,2) DEFAULT 0,
-		    `gold` DECIMAL(16,2) DEFAULT 0,
+		    `pass` VARCHAR(98) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL DEFAULT '',
+			`status` INT DEFAULT 0 CHECK (`status` IS NULL OR `status` IN (0, 1)),
+		    `gender` SMALLINT DEFAULT 0 CHECK (`gender` IS NULL OR `gender` IN (0, 1, 2)),
+			`credit` BIGINT DEFAULT 0 CHECK (`credit` IS NULL OR `credit` >= 0),
+		    `gold` BIGINT DEFAULT 0 CHECK (`gold` IS NULL OR `gold` >= 0),
 		    `level` INT DEFAULT 0,
 			`exp` INT DEFAULT 0,
 			`birthday` DATE,
@@ -702,12 +716,11 @@ class AccountMySQL (AccountBase):
 			`ip` VARCHAR(70),
 		    `RegDate` DATETIME,
 		    `LastLoginDate` DATETIME,
-			`LoginTimes` INT DEFAULT 0,
-			`CreditConsumed` DECIMAL(16,2) DEFAULT 0,
-			`GoldConsumed` DECIMAL(16,2) DEFAULT 0,
+			`LoginTimes` INT DEFAULT 0 CHECK (`LoginTimes` IS NULL OR `LoginTimes` >= 0),
+			`CreditConsumed` BIGINT DEFAULT 0 CHECK (`CreditConsumed` IS NULL OR `CreditConsumed` >= 0),
+			`GoldConsumed` BIGINT DEFAULT 0 CHECK (`GoldConsumed` IS NULL OR `GoldConsumed` >= 0),
 			KEY(`cid`),
-			KEY(`name`),
-			KEY(`src`)
+			KEY(`name`)
 			)
 		'''
 		sql = '\n'.join([ n.strip('\t') for n in sql.split('\n') ])
@@ -715,14 +728,14 @@ class AccountMySQL (AccountBase):
 		sql += ' ENGINE=InnoDB DEFAULT CHARSET=utf8;'
 		return sql % database
 
-	# DECIMAL 读出来是 Decimal 类型转成 float；DATE/DATETIME 读出来是
-	# date/datetime 对象转成字符串，均与其他后端类型对齐
+	# 金额列已改为 BIGINT（整数分），读出即 int；这里只对老库残留的
+	# Decimal 兜底取整（不做 ×100 换算，旧的 DECIMAL(元) 库须先迁移）
 	def _record2obj (self, record):
 		user = AccountBase._record2obj(self, record)
 		if user is not None:
 			for k in self.MONEY_FIELDS:
 				if isinstance(user.get(k), decimal.Decimal):
-					user[k] = float(user[k])
+					user[k] = int(user[k])
 			for k in self.DATE_FIELDS:
 				if k in user:
 					user[k] = self._date_str(k, user[k])
@@ -912,7 +925,7 @@ class AccountMySQL (AccountBase):
 				return False
 		return True
 
-	# 支付钱，kind为 'credit'或 'gold'，money是需要支付的钱数（必须大于0）
+	# 支付钱，kind为 'credit'或 'gold'，money是需要支付的钱数（单位：分，必须是大于 0 的整数）
 	# 返回 (结果, 还有多少钱, 错误原因)
 	# 结果=0支付成功，1用户不存在，2钱不够，3未知错误，4账户封禁，-1参数错误
 	def payment (self, uid, kind, money):
@@ -920,7 +933,7 @@ class AccountMySQL (AccountBase):
 		if error is not None:
 			return error
 		kind = kind.lower()
-		money = round(money, 2)
+		money = int(money)		# 单位：分（_money_error 已保证是整数）
 		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
 			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
 		if kind == 'credit':
@@ -956,13 +969,13 @@ class AccountMySQL (AccountBase):
 			return (3, data[x1], 'unknow payment error')
 		return (0, data[x1], 'ok')
 
-	# 存钱，kind为 'credit'或 'gold'，money是需要增加的钱数（必须大于0）
+	# 存钱，kind为 'credit'或 'gold'，money是需要增加的钱数（单位：分，必须是大于 0 的整数）
 	def deposit (self, uid, kind, money):
 		error = self._money_error(kind, money)
 		if error is not None:
 			return error
 		kind = kind.lower()
-		money = round(money, 2)
+		money = int(money)		# 单位：分（_money_error 已保证是整数）
 		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
 			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
 		sql = ('UPDATE account SET %s = %s + %%s '
@@ -1143,8 +1156,10 @@ class AccountMongo (AccountBase):
 		self.__open()
 		self.__account = self.__db.account
 		self.__seqs = self.__db['user.seqs']
-		if init:
-			self.init()
+		# 唯一索引是数据完整性的一部分：uid/urs 的唯一约束不能依赖调用方
+		# 记得传 init=True，这里无条件创建（create_index 幂等，已存在则跳过）。
+		# init 参数保留仅为兼容旧调用方。
+		self.init()
 
 	# 解析 mongo url: mongodb://user:pass@abc.com/database?key=val
 	def __url_parse (self, url):
@@ -1197,7 +1212,8 @@ class AccountMongo (AccountBase):
 		except Exception:
 			pass
 
-	# 初始化索引
+	# 初始化索引（幂等）：uid/urs 唯一约束 + cid/name 查询索引，
+	# 与 sqlite/mysql 的索引口径一致（不建 src 索引）；连接时自动调用
 	def init (self):
 		account = self.__account
 		account.create_index([('uid', 1)], unique = True)
@@ -1304,12 +1320,12 @@ class AccountMongo (AccountBase):
 		cc['gender'] = gender
 		cc['src'] = src
 		cc['LoginTimes'] = 0
-		cc['credit'] = 0.0
-		cc['gold'] = 0.0
+		cc['credit'] = 0
+		cc['gold'] = 0
 		cc['level'] = 0
 		cc['exp'] = 0
-		cc['CreditConsumed'] = 0.0
-		cc['GoldConsumed'] = 0.0
+		cc['CreditConsumed'] = 0
+		cc['GoldConsumed'] = 0
 		cc['status'] = 0
 		cc['RegDate'] = datetime.datetime.now()
 		try:
@@ -1371,7 +1387,7 @@ class AccountMongo (AccountBase):
 				return False
 		return True
 
-	# 支付钱，kind为 'credit'或 'gold'，money是需要支付的钱数（必须大于0）
+	# 支付钱，kind为 'credit'或 'gold'，money是需要支付的钱数（单位：分，必须是大于 0 的整数）
 	# 返回 (结果, 还有多少钱, 错误原因)
 	# 结果=0支付成功，1用户不存在，2钱不够，3未知错误，4账户封禁，-1参数错误
 	def payment (self, uid, kind, money):
@@ -1379,7 +1395,7 @@ class AccountMongo (AccountBase):
 		if error is not None:
 			return error
 		kind = kind.lower()
-		money = round(money, 2)
+		money = int(money)		# 单位：分（_money_error 已保证是整数）
 		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
 			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
 		inc = {}
@@ -1407,13 +1423,13 @@ class AccountMongo (AccountBase):
 			return (3, data[kind] or 0, 'unknow payment error')
 		return (0, data[kind], 'ok')
 
-	# 存钱，kind为 'credit'或 'gold'，money是需要增加的钱数（必须大于0）
+	# 存钱，kind为 'credit'或 'gold'，money是需要增加的钱数（单位：分，必须是大于 0 的整数）
 	def deposit (self, uid, kind, money):
 		error = self._money_error(kind, money)
 		if error is not None:
 			return error
 		kind = kind.lower()
-		money = round(money, 2)
+		money = int(money)		# 单位：分（_money_error 已保证是整数）
 		if isinstance(uid, bool) or not isinstance(uid, (int, long)):
 			return (-1, 0, 'uid must be int: %s' % (repr(uid),))
 		query = {'uid': uid, 'status': {'$in': [0, None]}}
@@ -1577,7 +1593,7 @@ def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN
 				return i
 		return len(weights) - 1
 
-	# 金额分档：绝大多数小额，极少数大额，全部 <= 50000
+	# 金额分档（单位：元，写入前用 _cents 换算成整数分）
 	def _money ():
 		r = rng.random()
 		if r < 0.85:
@@ -1585,6 +1601,10 @@ def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN
 		if r < 0.97:
 			return round(rng.uniform(1000, 10000), 2)
 		return round(rng.uniform(10000, 50000), 2)
+
+	# 元 -> 整数分：金额列是 BIGINT 整数分，应用层 /100 还原成元
+	def _cents (yuan):
+		return int(round(yuan * 100))
 
 	# 升到 level 所需累计经验（exp 由此推导，保证 level/exp 自洽）
 	def _exp_base (level):
@@ -1803,8 +1823,9 @@ def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN
 			'birthday': birth_v, 'mail': mail, 'mobile': mobile,
 			'sign': sign, 'photo': photo, 'intro': intro,
 			'misc': misc_v, 'status': status,
-			'credit': credit, 'gold': gold,
-			'CreditConsumed': credit_spent, 'GoldConsumed': gold_spent,
+			'credit': _cents(credit), 'gold': _cents(gold),
+			'CreditConsumed': _cents(credit_spent),
+			'GoldConsumed': _cents(gold_spent),
 			'RegDate': reg_v, 'LastLoginDate': last_v,
 			'LoginTimes': times, 'ip': None if never else _ip(),
 		})
@@ -1910,3 +1931,45 @@ if __name__ == '__main__':
 		# print('population: %d'%db.population())
 		return 0
 	test1()
+
+
+#----------------------------------------------------------------------
+# 旧库迁移：金额从「元（小数）」换算成「整数分」
+#----------------------------------------------------------------------
+# 改造前的库金额存的是「元」（sqlite REAL / mysql DECIMAL(16,2) / mongo
+# double），升级到整数分之前必须先换算，否则新旧单位混用会差 100 倍。
+# 下面三个迁移都只能跑一次（跑两遍会再放大 100 倍），执行前务必备份！
+#
+# 1) sqlite（备份 accountz.db 后用 sqlite3 执行）：
+#      UPDATE account SET
+#          credit         = CAST(ROUND(IFNULL(credit, 0) * 100) AS INTEGER),
+#          gold           = CAST(ROUND(IFNULL(gold, 0) * 100) AS INTEGER),
+#          CreditConsumed = CAST(ROUND(IFNULL(CreditConsumed, 0) * 100) AS INTEGER),
+#          GoldConsumed   = CAST(ROUND(IFNULL(GoldConsumed, 0) * 100) AS INTEGER);
+#    列类型不必改（BIGINT 在 sqlite 就是 INTEGER 亲和性）；CHECK 约束只在
+#    建表时写入，老库想要约束需自行重建表。
+#
+# 2) mysql（mysqldump 备份后执行；先 UPDATE 再 MODIFY，DECIMAL 里已经是分，
+#    转 BIGINT 直接取整）：
+#      UPDATE `account` SET
+#          `credit`         = ROUND(IFNULL(`credit`, 0) * 100),
+#          `gold`           = ROUND(IFNULL(`gold`, 0) * 100),
+#          `CreditConsumed` = ROUND(IFNULL(`CreditConsumed`, 0) * 100),
+#          `GoldConsumed`   = ROUND(IFNULL(`GoldConsumed`, 0) * 100);
+#      ALTER TABLE `account`
+#          MODIFY `uid` BIGINT NOT NULL AUTO_INCREMENT,
+#          MODIFY `pass` VARCHAR(98) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL DEFAULT '',
+#          MODIFY `credit` BIGINT DEFAULT 0,
+#          MODIFY `gold` BIGINT DEFAULT 0,
+#          MODIFY `CreditConsumed` BIGINT DEFAULT 0,
+#          MODIFY `GoldConsumed` BIGINT DEFAULT 0;
+#    索引口径统一为 cid/name（可选）：
+#      ALTER TABLE `account` DROP INDEX `src`, ADD INDEX `cid` (`cid`), ADD INDEX `name` (`name`);
+#
+# 3) mongo（mongodump 备份后在 mongosh 里执行）：
+#      db.account.find({}).forEach(function (d) {
+#          ['credit', 'gold', 'CreditConsumed', 'GoldConsumed'].forEach(function (k) {
+#              if (typeof d[k] === 'number') { d[k] = Math.round(d[k] * 100); }
+#          });
+#          db.account.replaceOne({_id: d._id}, d);
+#      });
