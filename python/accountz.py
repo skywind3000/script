@@ -6,7 +6,7 @@
 # accountz.py - 账号存储：sqlite / mysql / mongo 三个后端
 #
 # Created by skywind on 2017/03/16
-# Last change: 2026/09/21 15:18:23
+# Last change: 2026/09/21 16:12:40
 #
 # 重要字段说明：
 #
@@ -42,6 +42,30 @@
 #     拒绝；mongo 写入侧显式转 bson.Int64（pymongo 默认把 int32
 #     范围内的整数存成 Int32，不转的话存储类型与另两端不一致），
 #     自增计数器同样用 Int64
+# 12. 三端入库前统一过应用层校验（_register_error /
+#     _update_prepare）：字符串列按 DDL 宽度限长，urs/pass/name
+#     必填，gender 限 0/1/2，birthday 限 YYYY-MM-DD，misc 须
+#     可 JSON 序列化，cid 限 int64，level/exp/icon 限 int32（mysql
+#     INT 列宽），money 限 int64 正整数。DDL 的 CHECK/长度约束
+#     只有部分后端强制执行（sqlite 不限长、mongo 无 schema、
+#     MySQL 8.0.16 之前忽略 CHECK），只靠 DDL 会
+#     导致三端对同样的输入接受/拒绝行为不同
+# 13. mysql 读操作后显式 commit 结束事务（query/count/
+#     list_users 以及 login/passwd 的 SELECT）：autocommit 关闭时
+#     SELECT 会开启 REPEATABLE READ 快照且一直不结束，
+#     只读连接会永远读到旧数据，长事务还会阻碍 InnoDB purge；
+#     写路径的 commit/rollback 不变
+# 14. deposit/payment 的 SQL 自带 int64 溢出防护：余额/累计
+#     消费逼近上限时拒绝更新（sqlite 算术溢出静默转浮点、
+#     mysql 严格模式报错、mongo
+#     行为又不一致，应用层拒绝才能三端一致）
+# 15. close() 幂等；close 之后调用数据接口，三端统一抛
+#     AccountClosedError（此前 sqlite/mongo 抛 AttributeError，
+#     mysql 则静默返回 None，行为不一致且难排查）
+# 16. login 的 ip=None 未传时保留库中原 ip（旧实现会
+#     覆盖成 NULL）；非法 ip（非字符串/超 70 长度）按未传处理。
+#     mongo url 同时支持 mongodb:// 与 mongodb+srv://（Atlas
+#     等云托管的 SRV 格式）
 #
 #=====================================================================
 from __future__ import print_function
@@ -74,6 +98,20 @@ if sys.version_info[0] >= 3:
 
 
 #----------------------------------------------------------------------
+# AccountClosedError
+#----------------------------------------------------------------------
+class AccountClosedError (RuntimeError):
+	'''close() 之后再调用数据接口时抛出，三端行为一致。
+
+	此前 sqlite/mongo 抛 AttributeError('NoneType' object has no
+	attribute ...)，mysql 抛的 InterfaceError 被 except 吞掉后静默
+	返回 None——三端不一致且难排查。继承 RuntimeError 而不是任何
+	数据库错误基类，保证不会被各后端的 except DB-Error 捕获。
+	close() 本身幂等，重复调用不抛。'''
+	pass
+
+
+#----------------------------------------------------------------------
 # AccountBase
 #----------------------------------------------------------------------
 class AccountBase (object):
@@ -99,6 +137,21 @@ class AccountBase (object):
 	INT64_FIELDS = ( 'uid', 'cid' )
 	INT64_MIN = -(2 ** 63)
 	INT64_MAX = 2 ** 63 - 1
+
+	# level/exp/icon 在 mysql 端是 INT（32 位）列：sqlite 的 INTEGER 是 64
+	# 位、mongo 会自动升位，若只按 int64 校验，超 int32 的值会出现 sqlite/
+	# mongo 存得进、mysql 严格模式报错的三端分歧，故统一按 int32 校验
+	INT32_FIELDS = ( 'level', 'exp', 'icon' )
+	INT32_MIN = -(2 ** 31)
+	INT32_MAX = 2 ** 31 - 1
+
+	# 字符串列最大长度（与 DDL 的 VARCHAR 宽度一致）：sqlite 不强制列宽、
+	# mongo 无 schema、mysql 严格模式超长直接报错——三端行为不同，必须在
+	# 应用层入库前统一校验（见设计说明 12）
+	STR_FIELDS = {
+		'urs': 88, 'pass': 98, 'name': 32, 'mail': 88, 'mobile': 32,
+		'sign': 32, 'photo': 256, 'intro': 256, 'src': 16, 'ip': 70,
+	}
 
 	# 日期字段：对外 API 统一用字符串（与 sqlite 一致），mysql/mongo 内部转换。
 	# key=字段名，value=strftime 格式（birthday 只有日期，另两个含时分秒）
@@ -137,6 +190,10 @@ class AccountBase (object):
 			return (-1, 0, 'money must be integer cents: %s' % (money,))
 		if money <= 0:
 			return (-1, 0, 'money must be positive: %s' % (money,))
+		if not (self.INT64_MIN <= int(money) <= self.INT64_MAX):
+			# sqlite 绑定超 int64 的整数抛的是内建 OverflowError（不是
+			# sqlite3.Error），会炸穿异常防线，必须在入口拒绝
+			return (-1, 0, 'money out of int64 range: %s' % (money,))
 		return None
 
 	# 识别账号标识：int -> ('uid', 值)，str -> ('urs', 值)，无效 -> None
@@ -155,6 +212,106 @@ class AccountBase (object):
 		if isinstance(v, bool) or not isinstance(v, (int, long)):
 			return False
 		return self.INT64_MIN <= v <= self.INT64_MAX
+
+	# 是否为合法 int32 整数（bool 不算）：level/exp/icon 按 int32 校验，
+	# 与 mysql 的 INT 列宽对齐，避免三端对超大整数的接受度不一致
+	def _is_int32 (self, v):
+		if isinstance(v, bool) or not isinstance(v, (int, long)):
+			return False
+		return self.INT32_MIN <= v <= self.INT32_MAX
+
+	# 字符串字段校验：类型必须是 str/unicode，长度不超过 STR_FIELDS 里的
+	# DDL 列宽；none_ok 控制是否允许 None。合法返回 None，否则返回错误描述
+	def _str_error (self, field, v, none_ok = True):
+		if v is None:
+			return None if none_ok else ('%s must be a string, not None' % field)
+		if not isinstance(v, (str, unicode)):
+			return '%s must be a string: %s' % (field, repr(v))
+		limit = self.STR_FIELDS.get(field)
+		if limit is not None and len(v) > limit:
+			return '%s too long: %d > %d' % (field, len(v), limit)
+		return None
+
+	# gender 校验：必须是整数 0/1/2（DDL 的 CHECK 只有 sqlite 和新版
+	# mysql 强制执行，mongo 无约束，统一在应用层拦截）
+	def _gender_error (self, v):
+		if isinstance(v, bool) or not isinstance(v, (int, long)):
+			return 'gender must be an integer: %s' % (repr(v),)
+		if v not in (0, 1, 2):
+			return 'gender must be 0/1/2: %s' % (v,)
+		return None
+
+	# register() 参数校验：三端入库前统一执行，保证同样的输入在三个后端
+	# 得到同样的接受/拒绝结果。合法返回 None，否则返回错误描述
+	def _register_error (self, urs, passwd, name, gender, src):
+		error = self._str_error('urs', urs, none_ok = False)
+		if error is None and urs == '':
+			error = 'urs must not be empty'
+		if error is None:
+			error = self._str_error('pass', passwd, none_ok = False)
+		if error is None:
+			error = self._str_error('name', name, none_ok = False)
+		if error is None:
+			error = self._gender_error(gender)
+		if error is None:
+			error = self._str_error('src', src)
+		return error
+
+	# update() 单字段取值校验（只有白名单字段会进来）：cid 按 int64、
+	# level/exp/icon 按 int32、gender 按 0/1/2、birthday 必须是 None 或
+	# YYYY-MM-DD 字符串（或 date/datetime 对象）、misc 必须可 JSON 序列化、
+	# name 是 NOT NULL 字符串列不允许 None，其余按 STR_FIELDS 可空字符串
+	def _update_value_error (self, k, v):
+		if k == 'gender':
+			return self._gender_error(v)
+		if k == 'cid':
+			if not self._is_int64(v):
+				return 'cid must be an int64 integer: %s' % (repr(v),)
+			return None
+		if k in self.INT32_FIELDS:
+			if not self._is_int32(v):
+				return '%s must be an int32 integer: %s' % (k, repr(v))
+			return None
+		if k == 'birthday':
+			if v is None or isinstance(v, (datetime.datetime, datetime.date)):
+				return None
+			if not isinstance(v, (str, unicode)):
+				return 'birthday must be a date string: %s' % (repr(v),)
+			try:
+				datetime.datetime.strptime(v, '%Y-%m-%d')
+				return None
+			except ValueError:
+				return 'birthday must be in YYYY-MM-DD format: %s' % (v,)
+		if k == 'misc':
+			if v is None:
+				return None
+			try:
+				self._misc_dump(v)
+				return None
+			except (TypeError, ValueError):
+				return 'misc is not JSON serializable: %s' % (repr(v),)
+		# 其余都是字符串列；name 在 DDL 里 NOT NULL，不允许置 None
+		return self._str_error(k, v, none_ok = (k != 'name'))
+
+	# update() 公共预处理：白名单过滤 + 逐字段校验 + misc 编码（SQL 后端
+	# 转 json 文本；mongo 传 dump_misc=False 保留原生文档直接存 BSON）。
+	# 任一字段非法或没有可更新字段返回 None，否则返回 (列名, 值) 两个列表。
+	# 三端 update() 都先走这里，保证接受/拒绝行为完全一致
+	def _update_prepare (self, changes, dump_misc = True):
+		names, values = [], []
+		for k in changes:
+			if k not in self._updatable:
+				continue
+			v = changes[k]
+			if self._update_value_error(k, v) is not None:
+				return None
+			if k == 'misc' and v is not None and dump_misc:
+				v = self._misc_dump(v)
+			names.append(k)
+			values.append(v)
+		if not names:
+			return None
+		return names, values
 
 	# 数据库记录转字典（SQL 后端按列位置），misc 为 json 文本时解码，
 	# 解码失败时保留原始字符串，避免脏数据无声丢失
@@ -275,13 +432,24 @@ class AccountLocal (AccountBase):
 			self.__conn.commit()
 		return True
 
+	# close() 之后调用数据接口时抛统一的 AccountClosedError（三端一致）
+	def __check_open (self):
+		if self.__conn is None:
+			raise AccountClosedError('sqlite account database is closed')
+
 	# 登录，输入用户名和密码，返回用户数据
 	# passwd 为 None 且 force=False 时返回 None（拒绝无密码登录）
 	# force=True 时跳过密码验证（强制登录），但仍受封禁限制
+	# ip 为 None（或非法）时保留库中原 ip，不覆盖为 NULL
 	def login (self, urs, passwd, ip = None, force = False):
-		if not force and passwd is None:
-			return None
+		if not isinstance(urs, (str, unicode)):
+			return None		# mysql 端字符串列与整数比较会隐式转型，统一拒绝非字符串
+		if not force and not isinstance(passwd, (str, unicode)):
+			return None		# 拒绝无密码/非法类型密码登录
+		if ip is not None and self._str_error('ip', ip) is not None:
+			ip = None		# 非法 ip 按未传处理：保留原值，不影响登录
 		with self.__lock:
+			self.__check_open()
 			c = self.__conn.cursor()
 			try:
 				if force:
@@ -300,9 +468,15 @@ class AccountLocal (AccountBase):
 			if self.mode == 0:
 				now = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 				try:
-					self.__conn.execute('update account set '
-						'LastLoginDate = ?, LoginTimes = LoginTimes + 1, ip = ? '
-						'where urs = ?;', (now, ip, urs))
+					if ip is None:
+						# ip 未传时不动该列，保留上次登录 ip（旧实现会覆盖成 NULL）
+						self.__conn.execute('update account set '
+							'LastLoginDate = ?, LoginTimes = LoginTimes + 1 '
+							'where urs = ?;', (now, urs))
+					else:
+						self.__conn.execute('update account set '
+							'LastLoginDate = ?, LoginTimes = LoginTimes + 1, ip = ? '
+							'where urs = ?;', (now, ip, urs))
 					self.__conn.commit()
 				except sqlite3.Error:
 					self.__conn.rollback()
@@ -320,7 +494,10 @@ class AccountLocal (AccountBase):
 			return None
 		if uid is not None and not self._is_int64(uid):
 			return None		# uid 按 int64 处理，超界/非法类型视为无此用户
+		if urs is not None and not isinstance(urs, (str, unicode)):
+			return None		# mysql 端字符串列与整数比较会隐式转型，统一拒绝非字符串
 		with self.__lock:
+			self.__check_open()
 			c = self.__conn.cursor()
 			try:
 				if urs is not None and uid is None:
@@ -336,9 +513,12 @@ class AccountLocal (AccountBase):
 				c.close()
 		return self._record2obj(record)
 
-	# 用户注册，返回记录
+	# 用户注册，返回记录（参数校验失败/urs 已存在/数据库错误都返回 None）
 	def register (self, urs, passwd, name, gender = 0, src = None):
+		if self._register_error(urs, passwd, name, gender, src) is not None:
+			return None		# 应用层统一校验，三端接受/拒绝行为一致
 		with self.__lock:
+			self.__check_open()
 			now = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 			sql = 'INSERT INTO account(urs, pass, name, gender, src, RegDate, status) '
 			sql += 'VALUES(?, ?, ?, ?, ?, ?, 0);'
@@ -354,28 +534,21 @@ class AccountLocal (AccountBase):
 	# cid, name, gender, icon, mail, mobile, photo, misc, level, exp,
 	# birthday, sign, intro, src（密码请使用 passwd()）
 	# uid 可以是数字 uid 或者字符串 urs，无匹配返回 False
+	# 任一字段取值非法（类型/长度/值域）时整体拒绝，返回 False
 	def update (self, uid, changes):
 		where = self._identify(uid)
 		if where is None or not changes:
 			return False
-		column, value = where
-		names, values = [], []
-		for k in changes:
-			if k not in self._updatable:
-				continue
-			v = changes[k]
-			if k in self.INT64_FIELDS and not self._is_int64(v):
-				return False	# cid 等 int64 字段非法值，整体拒绝
-			if k == 'misc' and v is not None:
-				v = self._misc_dump(v)
-			names.append(k)
-			values.append(v)
-		if not names:
+		prepared = self._update_prepare(changes)
+		if prepared is None:
 			return False
+		names, values = prepared
+		column, value = where
 		sql = 'UPDATE account SET ' + ', '.join(['%s = ?' % n for n in names])
 		sql += ' WHERE %s = ?;' % column
 		values.append(value)
 		with self.__lock:
+			self.__check_open()
 			try:
 				c = self.__conn.execute(sql, tuple(values))
 				count = c.rowcount
@@ -394,11 +567,16 @@ class AccountLocal (AccountBase):
 	def passwd (self, uid, old, passwd = None):
 		if old is None and passwd is None:
 			return False
+		if old is not None and not isinstance(old, (str, unicode)):
+			return False	# mysql 端字符串列与整数比较会隐式转型，统一拒绝非字符串
+		if passwd is not None and not isinstance(passwd, (str, unicode)):
+			return False
 		where = self._identify(uid)
 		if where is None:
 			return False
 		column, value = where
 		with self.__lock:
+			self.__check_open()
 			if old is not None:
 				c = self.__conn.cursor()
 				try:
@@ -440,13 +618,17 @@ class AccountLocal (AccountBase):
 			x1, x2 = 'credit', 'CreditConsumed'
 		else:
 			x1, x2 = 'gold', 'GoldConsumed'
+		# x2 溢出防护：累计消费列逼近 int64 上限时拒绝更新（sqlite 溢出会
+		# 静默转成浮点、mysql 严格模式报错，三端必须一致地拒绝）
 		sql = ('UPDATE account SET %s = %s - ?, %s = %s + ? '
-			'WHERE uid = ? and %s >= ? and IFNULL(status, 0) = 0;')
-		sql = sql % (x1, x1, x2, x2, x1)
+			'WHERE uid = ? and %s >= ? and IFNULL(status, 0) = 0 and %s <= ?;')
+		sql = sql % (x1, x1, x2, x2, x1, x2)
 		with self.__lock:
+			self.__check_open()
 			changes = self.__conn.total_changes
 			try:
-				self.__conn.execute(sql, (money, money, uid, money))
+				self.__conn.execute(sql, (money, money, uid, money,
+					self.INT64_MAX - money))
 				self.__conn.commit()
 			except sqlite3.Error:
 				self.__conn.rollback()
@@ -471,13 +653,16 @@ class AccountLocal (AccountBase):
 		money = int(money)		# 单位：分（_money_error 已保证是整数）
 		if not self._is_int64(uid):
 			return (-1, 0, 'uid must be int64: %s' % (repr(uid),))
+		# 余额溢出防护：累加会超 int64 上限时拒绝更新（sqlite 溢出会静默
+		# 转成浮点、mysql 严格模式报错，三端必须一致地拒绝）
 		sql = ('UPDATE account SET %s = %s + ? '
-			'WHERE uid = ? and IFNULL(status, 0) = 0;')
-		sql = sql % (kind, kind)
+			'WHERE uid = ? and IFNULL(status, 0) = 0 and %s <= ?;')
+		sql = sql % (kind, kind, kind)
 		with self.__lock:
+			self.__check_open()
 			changes = self.__conn.total_changes
 			try:
-				self.__conn.execute(sql, (money, uid))
+				self.__conn.execute(sql, (money, uid, self.INT64_MAX - money))
 				self.__conn.commit()
 			except sqlite3.Error:
 				self.__conn.rollback()
@@ -488,6 +673,8 @@ class AccountLocal (AccountBase):
 		if changed == 0:
 			if (data.get('status') or 0) != 0:
 				return (4, data[kind], 'account banned')
+			if data[kind] > self.INT64_MAX - money:
+				return (2, data[kind], 'deposit would overflow int64')
 			return (2, data[kind], 'unknow deposit error')
 		return (0, data[kind], 'ok')
 
@@ -498,6 +685,7 @@ class AccountLocal (AccountBase):
 			return False
 		column, value = where
 		with self.__lock:
+			self.__check_open()
 			try:
 				c = self.__conn.execute('DELETE FROM account WHERE %s = ?;' % column, (value,))
 				count = c.rowcount
@@ -511,6 +699,7 @@ class AccountLocal (AccountBase):
 	# 用户总数，出错返回 -1
 	def count (self):
 		with self.__lock:
+			self.__check_open()
 			try:
 				c = self.__conn.execute('SELECT COUNT(*) FROM account;')
 				record = c.fetchone()
@@ -523,10 +712,12 @@ class AccountLocal (AccountBase):
 	def list_users (self, offset = 0, limit = 20):
 		if isinstance(offset, bool) or not isinstance(offset, int) or \
 			isinstance(limit, bool) or not isinstance(limit, int) or \
-			offset < 0 or limit < 0:
-			return None
+			offset < 0 or limit < 0 or \
+			offset > self.INT64_MAX or limit > self.INT64_MAX:
+			return None		# 超 int64 的 offset 绑定参数会抛 OverflowError，入口拒绝
 		limit = min(limit, 1000)
 		with self.__lock:
+			self.__check_open()
 			c = self.__conn.cursor()
 			try:
 				c.execute('SELECT * FROM account ORDER BY uid LIMIT ? OFFSET ?;', (limit, offset))
@@ -551,6 +742,7 @@ class AccountLocal (AccountBase):
 			return False
 		column, value = where
 		with self.__lock:
+			self.__check_open()
 			try:
 				c = self.__conn.execute('UPDATE account SET status = ? WHERE %s = ?;' % column,
 					(status, value))
@@ -568,6 +760,7 @@ class AccountLocal (AccountBase):
 		sql = 'INSERT INTO account(urs, name, pass, gender, RegDate) VALUES(?, ?, ?, ?, ?);'
 		succeed = 0
 		with self.__lock:
+			self.__check_open()
 			for i in xrange(count):
 				urs = '10%d@qq.com' % (i + 1)
 				name = 'name%d' % (i + 1)
@@ -702,17 +895,31 @@ class AccountMySQL (AccountBase):
 			print(text)
 		return True
 
-	# 取游标前先 ping，断线自动按建连参数重连（包括当前 db）
+	# 取游标前先 ping，断线自动按建连参数重连（包括当前 db）；close() 后
+	# 抛统一的 AccountClosedError（不再抛 InterfaceError 被各方法的
+	# except MySQLdb.Error 吞成静默 None，与另两端行为对齐）
 	def _cursor (self):
 		if self.__conn is None:
-			raise MySQLdb.InterfaceError('connection is closed')
+			raise AccountClosedError('mysql connection is closed')
 		self.__conn.ping(True)
 		return self.__conn.cursor()
+
+	# 只读操作结束后显式 commit 结束事务：autocommit 关闭时 SELECT 会开启
+	# REPEATABLE READ 一致性快照且一直不结束——只读连接会永远读到旧数据，
+	# 长事务还会阻碍 InnoDB purge。commit 失败（如断线）忽略即可，下次
+	# 操作 _cursor 的 ping 会自动重连
+	def _end_read (self):
+		try:
+			self.__conn.commit()
+		except MySQLdb.Error:
+			pass
 
 	# 初始化数据库与表格，结束后带 db 重连
 	def init (self):
 		database = self.__db
 		self.out('create database: %s' % database)
+		if self.__conn is None:
+			raise AccountClosedError('mysql connection is closed')
 		c = self.__conn.cursor()
 		try:
 			c.execute('SET sql_notes = 0;')
@@ -799,9 +1006,14 @@ class AccountMySQL (AccountBase):
 	# 登录，输入用户名和密码，返回用户数据
 	# passwd 为 None 且 force=False 时返回 None（拒绝无密码登录）
 	# force=True 时跳过密码验证（强制登录），但仍受封禁限制
+	# ip 为 None（或非法）时保留库中原 ip，不覆盖为 NULL
 	def login (self, urs, passwd, ip = None, force = False):
-		if not force and passwd is None:
-			return None
+		if not isinstance(urs, (str, unicode)):
+			return None		# 字符串列与整数比较会隐式转型匹配错行，统一拒绝非字符串
+		if not force and not isinstance(passwd, (str, unicode)):
+			return None		# 拒绝无密码/非法类型密码登录
+		if ip is not None and self._str_error('ip', ip) is not None:
+			ip = None		# 非法 ip 按未传处理：保留原值，不影响登录
 		try:
 			c = self._cursor()
 			try:
@@ -814,6 +1026,7 @@ class AccountMySQL (AccountBase):
 				c.close()
 		except MySQLdb.Error:
 			return None
+		self._end_read()	# 结束只读事务，避免 REPEATABLE READ 快照陈旧
 		if record is None:
 			return None
 		if self._record_status(record) != 0:
@@ -823,9 +1036,15 @@ class AccountMySQL (AccountBase):
 			try:
 				c = self._cursor()
 				try:
-					c.execute('update account set LastLoginDate = %s, '
-						'LoginTimes = LoginTimes + 1, ip = %s where urs = %s;',
-						(now, ip, urs))
+					if ip is None:
+						# ip 未传时不动该列，保留上次登录 ip（旧实现会覆盖成 NULL）
+						c.execute('update account set LastLoginDate = %s, '
+							'LoginTimes = LoginTimes + 1 where urs = %s;',
+							(now, urs))
+					else:
+						c.execute('update account set LastLoginDate = %s, '
+							'LoginTimes = LoginTimes + 1, ip = %s where urs = %s;',
+							(now, ip, urs))
 				finally:
 					c.close()
 				self.__conn.commit()
@@ -848,6 +1067,8 @@ class AccountMySQL (AccountBase):
 			return None
 		if uid is not None and not self._is_int64(uid):
 			return None		# uid 按 int64 处理，超界/非法类型视为无此用户
+		if urs is not None and not isinstance(urs, (str, unicode)):
+			return None		# 字符串列与整数比较会隐式转型，统一拒绝非字符串
 		record = None
 		try:
 			c = self._cursor()
@@ -863,10 +1084,13 @@ class AccountMySQL (AccountBase):
 				c.close()
 		except MySQLdb.Error:
 			return None
+		self._end_read()	# 结束只读事务，避免 REPEATABLE READ 快照陈旧
 		return self._record2obj(record)
 
-	# 用户注册，返回记录
+	# 用户注册，返回记录（参数校验失败/urs 已存在/数据库错误都返回 None）
 	def register (self, urs, passwd, name, gender = 0, src = None):
+		if self._register_error(urs, passwd, name, gender, src) is not None:
+			return None		# 应用层统一校验，三端接受/拒绝行为一致
 		now = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 		sql = 'INSERT INTO account(urs, pass, name, gender, src, RegDate, status) '
 		sql += 'VALUES(%s, %s, %s, %s, %s, %s, 0);'
@@ -889,24 +1113,16 @@ class AccountMySQL (AccountBase):
 	# cid, name, gender, icon, mail, mobile, photo, misc, level, exp,
 	# birthday, sign, intro, src（密码请使用 passwd()）
 	# uid 可以是数字 uid 或者字符串 urs，无匹配返回 False
+	# 任一字段取值非法（类型/长度/值域）时整体拒绝，返回 False
 	def update (self, uid, changes):
 		where = self._identify(uid)
 		if where is None or not changes:
 			return False
-		column, value = where
-		names, values = [], []
-		for k in changes:
-			if k not in self._updatable:
-				continue
-			v = changes[k]
-			if k in self.INT64_FIELDS and not self._is_int64(v):
-				return False	# cid 等 int64 字段非法值，整体拒绝
-			if k == 'misc' and v is not None:
-				v = self._misc_dump(v)
-			names.append(k)
-			values.append(v)
-		if not names:
+		prepared = self._update_prepare(changes)
+		if prepared is None:
 			return False
+		names, values = prepared
+		column, value = where
 		sql = 'UPDATE account SET ' + ', '.join(['%s = %%s' % n for n in names])
 		sql += ' WHERE %s = %%s;' % column
 		values.append(value)
@@ -934,6 +1150,10 @@ class AccountMySQL (AccountBase):
 	def passwd (self, uid, old, passwd = None):
 		if old is None and passwd is None:
 			return False
+		if old is not None and not isinstance(old, (str, unicode)):
+			return False	# 字符串列与整数比较会隐式转型，统一拒绝非字符串
+		if passwd is not None and not isinstance(passwd, (str, unicode)):
+			return False
 		where = self._identify(uid)
 		if where is None:
 			return False
@@ -949,6 +1169,7 @@ class AccountMySQL (AccountBase):
 					c.close()
 			except MySQLdb.Error:
 				return False
+			self._end_read()	# 结束只读事务，避免 REPEATABLE READ 快照陈旧
 			if record is None:
 				return False
 		if passwd is not None and passwd != old:
@@ -986,14 +1207,17 @@ class AccountMySQL (AccountBase):
 			x1, x2 = 'credit', 'CreditConsumed'
 		else:
 			x1, x2 = 'gold', 'GoldConsumed'
+		# x2 溢出防护：累计消费列逼近 int64 上限时拒绝更新（sqlite 溢出会
+		# 静默转成浮点、mysql 严格模式报错，三端必须一致地拒绝）
 		sql = ('UPDATE account SET %s = %s - %%s, %s = %s + %%s '
-			'WHERE uid = %%s and %s >= %%s and IFNULL(status, 0) = 0;')
-		sql = sql % (x1, x1, x2, x2, x1)
+			'WHERE uid = %%s and %s >= %%s and IFNULL(status, 0) = 0 and %s <= %%s;')
+		sql = sql % (x1, x1, x2, x2, x1, x2)
 		changed = 0
 		try:
 			c = self._cursor()
 			try:
-				c.execute(sql, (money, money, uid, money))
+				c.execute(sql, (money, money, uid, money,
+					self.INT64_MAX - money))
 				changed = c.rowcount
 			finally:
 				c.close()
@@ -1024,14 +1248,16 @@ class AccountMySQL (AccountBase):
 		money = int(money)		# 单位：分（_money_error 已保证是整数）
 		if not self._is_int64(uid):
 			return (-1, 0, 'uid must be int64: %s' % (repr(uid),))
+		# 余额溢出防护：累加会超 int64 上限时拒绝更新（sqlite 溢出会静默
+		# 转成浮点、mysql 严格模式报错，三端必须一致地拒绝）
 		sql = ('UPDATE account SET %s = %s + %%s '
-			'WHERE uid = %%s and IFNULL(status, 0) = 0;')
-		sql = sql % (kind, kind)
+			'WHERE uid = %%s and IFNULL(status, 0) = 0 and %s <= %%s;')
+		sql = sql % (kind, kind, kind)
 		changed = 0
 		try:
 			c = self._cursor()
 			try:
-				c.execute(sql, (money, uid))
+				c.execute(sql, (money, uid, self.INT64_MAX - money))
 				changed = c.rowcount
 			finally:
 				c.close()
@@ -1048,6 +1274,8 @@ class AccountMySQL (AccountBase):
 		if changed == 0:
 			if (data.get('status') or 0) != 0:
 				return (4, data[kind], 'account banned')
+			if data[kind] > self.INT64_MAX - money:
+				return (2, data[kind], 'deposit would overflow int64')
 			return (2, data[kind], 'unknow deposit error')
 		return (0, data[kind], 'ok')
 
@@ -1084,14 +1312,16 @@ class AccountMySQL (AccountBase):
 				c.close()
 		except MySQLdb.Error:
 			return -1
+		self._end_read()	# 结束只读事务，避免 REPEATABLE READ 快照陈旧
 		return record[0] if record else 0
 
 	# 分页列出用户，按 uid 升序，返回字典列表（不含密码），出错返回 None
 	def list_users (self, offset = 0, limit = 20):
 		if isinstance(offset, bool) or not isinstance(offset, int) or \
 			isinstance(limit, bool) or not isinstance(limit, int) or \
-			offset < 0 or limit < 0:
-			return None
+			offset < 0 or limit < 0 or \
+			offset > self.INT64_MAX or limit > self.INT64_MAX:
+			return None		# 超 int64 的值格式化进 SQL 会溢出，入口拒绝
 		limit = min(limit, 1000)
 		sql = 'SELECT * FROM account ORDER BY uid LIMIT %d OFFSET %d;' % (limit, offset)
 		try:
@@ -1103,6 +1333,7 @@ class AccountMySQL (AccountBase):
 				c.close()
 		except MySQLdb.Error:
 			return None
+		self._end_read()	# 结束只读事务，避免 REPEATABLE READ 快照陈旧
 		return [ self._record2obj(n) for n in records ]
 
 	# 封禁账户 (status=1)，封禁后无法登录/支付/充值
@@ -1210,14 +1441,20 @@ class AccountMongo (AccountBase):
 		self.init()
 
 	# 解析 mongo url: mongodb://user:pass@abc.com/database?key=val
+	# 同时支持 mongodb+srv://（Atlas 等云托管的 SRV 格式），整条 URL 都
+	# 原样交给 pymongo 解析连接，这里只负责提取 database 名
 	def __url_parse (self, url):
 		url = url.strip('\r\n\t ')
-		chk = 'mongodb://'
-		if url[:len(chk)] != chk:
+		prefix = None
+		for chk in ('mongodb+srv://', 'mongodb://'):
+			if url[:len(chk)] == chk:
+				prefix = chk
+				break
+		if prefix is None:
 			raise ValueError('bad protocol: %s' % url)
 		config = {}
 		config['url'] = url
-		url = url[len(chk):]
+		url = url[len(prefix):]
 		p1 = url.find('/')
 		if p1 >= 0:
 			dbname = url[p1 + 1:]
@@ -1239,6 +1476,11 @@ class AccountMongo (AccountBase):
 		self.__client = pymongo.MongoClient(self.__config['url'])
 		self.__db = self.__client[self.__config['db']]
 		return self.__db
+
+	# close() 之后调用数据接口时抛统一的 AccountClosedError（三端一致）
+	def __check_open (self):
+		if self.__account is None:
+			raise AccountClosedError('mongo account database is closed')
 
 	# 关闭数据库和客户端连接
 	def close (self):
@@ -1263,6 +1505,7 @@ class AccountMongo (AccountBase):
 	# 初始化索引（幂等）：uid/urs 唯一约束 + cid/name 查询索引，
 	# 与 sqlite/mysql 的索引口径一致（不建 src 索引）；连接时自动调用
 	def init (self):
+		self.__check_open()
 		account = self.__account
 		account.create_index([('uid', 1)], unique = True)
 		account.create_index([('urs', 1)], unique = True)
@@ -1316,9 +1559,15 @@ class AccountMongo (AccountBase):
 	# 登录，输入用户名和密码，返回用户数据
 	# passwd 为 None 且 force=False 时返回 None（拒绝无密码登录）
 	# force=True 时跳过密码验证（强制登录），但仍受封禁限制
+	# ip 为 None（或非法）时保留库中原 ip，不覆盖为 NULL
 	def login (self, urs, passwd, ip = None, force = False):
-		if not force and passwd is None:
-			return None
+		if not isinstance(urs, (str, unicode)):
+			return None		# 与 SQL 端对齐：非字符串 urs 一律拒绝
+		if not force and not isinstance(passwd, (str, unicode)):
+			return None		# 拒绝无密码/非法类型密码登录
+		if ip is not None and self._str_error('ip', ip) is not None:
+			ip = None		# 非法 ip 按未传处理：保留原值，不影响登录
+		self.__check_open()
 		account = self.__account
 		try:
 			if force:
@@ -1332,10 +1581,12 @@ class AccountMongo (AccountBase):
 		if (cc.get('status') or 0) != 0:
 			return None
 		if self.mode == 0:
+			setting = {'LastLoginDate': datetime.datetime.now()}
+			if ip is not None:
+				setting['ip'] = ip	# ip 未传时不动该字段，保留上次登录 ip
 			try:
 				account.update_one({'_id': cc['_id']},
-					{'$set': {'ip': ip, 'LastLoginDate': datetime.datetime.now()},
-					 '$inc': {'LoginTimes': 1}})
+					{'$set': setting, '$inc': {'LoginTimes': 1}})
 			except pymongo.errors.PyMongoError:
 				pass
 		# 重新查询，返回更新后的最新数据
@@ -1351,6 +1602,9 @@ class AccountMongo (AccountBase):
 			return None
 		if uid is not None and not self._is_int64(uid):
 			return None		# uid 按 int64 处理，超界/非法类型视为无此用户
+		if urs is not None and not isinstance(urs, (str, unicode)):
+			return None		# 与 SQL 端对齐：非字符串 urs 一律拒绝
+		self.__check_open()
 		account = self.__account
 		try:
 			if urs is not None and uid is None:
@@ -1368,8 +1622,11 @@ class AccountMongo (AccountBase):
 			del cc['_id']
 		return cc
 
-	# 注册用户，返回记录
+	# 注册用户，返回记录（参数校验失败/urs 已存在/数据库错误都返回 None）
 	def register (self, urs, passwd, name, gender = 0, src = None):
+		if self._register_error(urs, passwd, name, gender, src) is not None:
+			return None		# 应用层统一校验，三端接受/拒绝行为一致
+		self.__check_open()
 		account = self.__account
 		try:
 			cc = account.find_one({'urs': urs}, {'_id': True})
@@ -1404,26 +1661,31 @@ class AccountMongo (AccountBase):
 	# cid, name, gender, icon, mail, mobile, photo, misc, level, exp,
 	# birthday, sign, intro, src（密码请使用 passwd()）
 	# uid 可以是数字 uid 或者字符串 urs，无匹配返回 False
+	# 任一字段取值非法（类型/长度/值域）时整体拒绝，返回 False
 	def update (self, uid, changes):
 		where = self._identify(uid)
 		if where is None or not changes:
 			return False
-		column, value = where
-		setting = {}
-		for name in self._updatable:
-			if name in changes:
-				v = changes[name]
-				if name in self.DATE_FIELDS:
-					v = self._date_obj(name, v)	# str -> datetime，存为 BSON 日期
-				elif name in self.INT64_FIELDS:
-					# cid 等 int64 字段：先校验值域，再以 BSON Int64 存储
-					# （pymongo 默认把 int32 范围内的整数编码成 Int32）
-					if not self._is_int64(v):
-						return False
-					v = bson.Int64(v)
-				setting[name] = v
-		if not setting:
+		prepared = self._update_prepare(changes)
+		if prepared is None:
 			return False
+		names, values = prepared
+		column, value = where
+		self.__check_open()
+		setting = {}
+		for k, v in zip(names, values):
+			if k == 'misc':
+				# _update_prepare 已把 misc 编码成 json 文本，这里还原成原生
+				# 文档存储，与 sqlite/mysql 端 _misc_load 读回的对象完全一致
+				# （非字符串键也会被 json 往返统一成字符串键，BSON 才存得进）
+				v = self._misc_load(v)
+			elif k in self.DATE_FIELDS:
+				v = self._date_obj(k, v)	# str -> datetime，存为 BSON 日期
+				if isinstance(v, datetime.date) and not isinstance(v, datetime.datetime):
+					v = datetime.datetime(v.year, v.month, v.day)	# pymongo 不收 date
+			elif k in self.INT64_FIELDS:
+				v = bson.Int64(v)	# 值域已由 _update_prepare 校验
+			setting[k] = v
 		try:
 			result = self.__account.update_one({column: value}, {'$set': setting})
 		except pymongo.errors.PyMongoError:
@@ -1438,10 +1700,15 @@ class AccountMongo (AccountBase):
 	def passwd (self, uid, old, passwd = None):
 		if old is None and passwd is None:
 			return False
+		if old is not None and not isinstance(old, (str, unicode)):
+			return False	# 与 SQL 端对齐：非字符串一律拒绝
+		if passwd is not None and not isinstance(passwd, (str, unicode)):
+			return False
 		where = self._identify(uid)
 		if where is None:
 			return False
 		column, value = where
+		self.__check_open()
 		account = self.__account
 		if old is not None:
 			try:
@@ -1474,11 +1741,17 @@ class AccountMongo (AccountBase):
 		if kind == 'credit':
 			inc['credit'] = -money
 			inc['CreditConsumed'] = money
+			consumed = 'CreditConsumed'
 		else:
 			inc['gold'] = -money
 			inc['GoldConsumed'] = money
-		# $in 匹配 status=0/None/字段缺失，与 SQL 的 IFNULL(status,0)=0 对齐
-		query = {'uid': uid, 'status': {'$in': [0, None]}, kind: {'$gte': money}}
+			consumed = 'GoldConsumed'
+		# $in 匹配 status=0/None/字段缺失，与 SQL 的 IFNULL(status,0)=0 对齐；
+		# consumed 溢出防护：累计消费列逼近 int64 上限时拒绝更新（$not/$gt
+		# 对缺失字段按 0 处理，与 SQL 端 列 <= INT64_MAX - money 语义一致）
+		query = {'uid': uid, 'status': {'$in': [0, None]}, kind: {'$gte': money},
+			consumed: {'$not': {'$gt': self.INT64_MAX - money}}}
+		self.__check_open()
 		hh = None
 		try:
 			hh = self.__account.find_one_and_update(query, {'$inc': inc})
@@ -1504,7 +1777,11 @@ class AccountMongo (AccountBase):
 		money = int(money)		# 单位：分（_money_error 已保证是整数）
 		if not self._is_int64(uid):
 			return (-1, 0, 'uid must be int64: %s' % (repr(uid),))
-		query = {'uid': uid, 'status': {'$in': [0, None]}}
+		# 余额溢出防护：累加会超 int64 上限时拒绝更新（$not/$gt 对缺失
+		# 字段按 0 处理，与 SQL 端 列 <= INT64_MAX - money 语义一致）
+		query = {'uid': uid, 'status': {'$in': [0, None]},
+			kind: {'$not': {'$gt': self.INT64_MAX - money}}}
+		self.__check_open()
 		hh = None
 		try:
 			hh = self.__account.find_one_and_update(query, {'$inc': {kind: money}})
@@ -1516,6 +1793,8 @@ class AccountMongo (AccountBase):
 		if hh is None:
 			if (data.get('status') or 0) != 0:
 				return (4, data[kind], 'account banned')
+			if (data[kind] or 0) > self.INT64_MAX - money:
+				return (2, data[kind] or 0, 'deposit would overflow int64')
 			return (2, data[kind] or 0, 'unknow deposit error')
 		return (0, data[kind], 'ok')
 
@@ -1525,6 +1804,7 @@ class AccountMongo (AccountBase):
 		if where is None:
 			return False
 		column, value = where
+		self.__check_open()
 		try:
 			result = self.__account.delete_one({column: value})
 		except pymongo.errors.PyMongoError:
@@ -1533,6 +1813,7 @@ class AccountMongo (AccountBase):
 
 	# 用户总数，出错返回 -1
 	def count (self):
+		self.__check_open()
 		try:
 			return self.__account.count_documents({})
 		except pymongo.errors.PyMongoError:
@@ -1542,10 +1823,12 @@ class AccountMongo (AccountBase):
 	def list_users (self, offset = 0, limit = 20):
 		if isinstance(offset, bool) or not isinstance(offset, int) or \
 			isinstance(limit, bool) or not isinstance(limit, int) or \
-			offset < 0 or limit < 0:
-			return None
+			offset < 0 or limit < 0 or \
+			offset > self.INT64_MAX or limit > self.INT64_MAX:
+			return None		# 与 SQL 端对齐：超 int64 的 offset/limit 入口拒绝
 		limit = min(limit, 1000)
 		users = []
+		self.__check_open()
 		try:
 			cursor = self.__account.find().sort('uid', 1).skip(offset).limit(limit)
 			for record in cursor:
@@ -1570,6 +1853,7 @@ class AccountMongo (AccountBase):
 		if where is None:
 			return False
 		column, value = where
+		self.__check_open()
 		try:
 			result = self.__account.update_one({column: value}, {'$set': {'status': status}})
 		except pymongo.errors.PyMongoError:
