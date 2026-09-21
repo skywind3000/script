@@ -2004,7 +2004,9 @@ if __name__ == '__main__':
 		# print(db.passwd(uid, None, '1234'))
 		# print('population: %d'%db.population())
 		return 0
-	def test4():
-		print('hello world')
-	test4()
+	def info():
+		print('Unified account management module for local/MySQL/MongoDB backends.')
+	# test4()
+	info()
+
 
