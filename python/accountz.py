@@ -6,13 +6,14 @@
 # accountz.py - 账号存储：sqlite / mysql / mongo 三个后端
 #
 # Created by skywind on 2017/03/16
-# Last change: 2026/09/21 17:30:00
+# Last change: 2026/09/21 18:40:00
 #
 # 重要字段说明：
 #
 # - uid: 整数 64 位自增量，内部用户唯一标识
 # - urs: 用户字符串唯一标识，一般是用户的登录名
-# - cid: 外部 uid，帮忙存储外部用户数据库的整数主键，方便做数据关联
+# - cid: 外部 uid（64 位整数，0=未绑定），存储外部用户数据库的主键，
+#   方便做数据关联
 #
 # 设计说明：
 #
@@ -23,52 +24,30 @@
 #    且大于 0，应用层自己 /100 转成元来显示
 # 3. status: 0=正常, 1=封禁（封禁后禁止登录/支付/充值）
 # 4. mode: 0/登录时更新统计(LastLoginDate/LoginTimes/ip)，非 0 只验证
-# 5. 三个后端行为对齐：字段表、错误码、大小写敏感比较、应用侧时间
-# 6. update() 不能修改密码（白名单不含 pass），改密码请用 passwd()
-# 7. 索引三端统一为 cid / name（另加 uid/urs 唯一），不再建 src 索引
-# 8. 表级约束：status/gender 值域、金额与登录次数非负，DDL 内置 CHECK
+# 5. update() 不能修改密码（白名单不含 pass），改密码请用 passwd()
+# 6. 索引：uid/urs 唯一约束，另建 cid/name 查询索引（不建 src）
+# 7. 表级约束：status/gender 值域、金额与登录次数非负，DDL 内置 CHECK
 #    （MySQL 8.0.16 之前会解析但忽略 CHECK，属预期行为）
-# 9. 时间字段以机房所在时区的本地时间为准，不存 UTC
-# 10. 数值/状态列一律 NOT NULL DEFAULT 0（cid/status/gender/credit/
-#     gold/level/exp/icon/LoginTimes/CreditConsumed/GoldConsumed），
-#     RegDate 也是 NOT NULL。NULL 会打穿 SQL 三值逻辑（LoginTimes+1、
-#     credit>=? 全变 NULL），也会污染 SUM()/AVG() 统计口径；NULL
-#     status 还会被当成「未封禁」。cid 是「外部指定的外部 uid」
-#     （非自增、非渠道号），BIGINT，0=未绑定。真正的可选资料
-#     （birthday/mail/mobile/sign/photo/intro/misc/ip/
-#     LastLoginDate/src）保持可空——NULL 与空串语义不同
-# 11. uid/cid 三端统一为 int64（有符号 64 位）：sqlite 的 INTEGER
-#     本身就是 64 位，mysql 用 BIGINT；超出值域的 uid/cid 参数一律
-#     拒绝；mongo 写入侧显式转 bson.Int64（pymongo 默认把 int32
-#     范围内的整数存成 Int32，不转的话存储类型与另两端不一致），
-#     自增计数器同样用 Int64
-# 12. 三端入库前统一过应用层校验（_register_error /
-#     _update_prepare / _passwd_error）：字符串列按 DDL 宽度
-#     限长（passwd() 的新密码同样受 pass 列宽约束），urs/pass/
-#     name 必填，gender 限 0/1/2，birthday 限 YYYY-MM-DD 且
-#     date/datetime 对象与非零填充串（如 '2020-1-2'）统一归一化
-#     后再入库（此前 sqlite 原样绑定、读回格式与另两端不一致），
-#     misc 须可 JSON 序列化，cid 限 int64，level/exp/icon 限
-#     int32（mysql INT 列宽），money 限 int64 正整数。DDL 的
-#     CHECK/长度约束只有部分后端强制执行（sqlite 不限长、
-#     mongo 无 schema、MySQL 8.0.16 之前忽略 CHECK），只靠
-#     DDL 会导致三端对同样的输入接受/拒绝行为不同
-# 13. mysql 读操作后显式 commit 结束事务（query/count/
-#     list_users 以及 login/passwd 的 SELECT）：autocommit 关闭时
-#     SELECT 会开启 REPEATABLE READ 快照且一直不结束，
-#     只读连接会永远读到旧数据，长事务还会阻碍 InnoDB purge；
-#     写路径的 commit/rollback 不变
-# 14. deposit/payment 的 SQL 自带 int64 溢出防护：余额/累计
-#     消费逼近上限时拒绝更新（sqlite 算术溢出静默转浮点、
-#     mysql 严格模式报错、mongo
-#     行为又不一致，应用层拒绝才能三端一致）
-# 15. close() 幂等；close 之后调用数据接口，三端统一抛
-#     AccountClosedError（此前 sqlite/mongo 抛 AttributeError，
-#     mysql 则静默返回 None，行为不一致且难排查）
-# 16. login 的 ip=None 未传时保留库中原 ip（旧实现会
-#     覆盖成 NULL）；非法 ip（非字符串/超 70 长度）按未传处理。
-#     mongo url 同时支持 mongodb:// 与 mongodb+srv://（Atlas
-#     等云托管的 SRV 格式）
+# 8. 时间字段以机房所在时区的本地时间为准，不存 UTC
+# 9. 入库前过应用层校验（_register_error / _update_prepare /
+#    _passwd_error）：字符串列按 DDL 宽度限长（passwd() 的新密码
+#    同样受 pass 列宽约束），urs/pass/name 必填，gender 限 0/1/2，
+#    birthday 归一化成 YYYY-MM-DD 再入库（date/datetime 对象、
+#    非零填充串如 '2020-1-2' 均可），misc 须可 JSON 序列化，
+#    level/exp/icon 限 int32（mysql INT 列宽）
+# 10. mysql 连接使用 autocommit=True：模块所有写操作都是单语句，
+#     逐条自动提交与原显式 commit 等价；SELECT 不再残留打开的事务
+#     （autocommit 关闭时 REPEATABLE READ 快照钉在首条读上，只读
+#     连接永远读旧数据，长事务还阻碍 InnoDB purge）。将来若需
+#     多语句原子操作，用显式 BEGIN...COMMIT 手工事务（autocommit
+#     在事务期间自动挂起，结束后恢复）
+# 11. deposit/payment 自带 int64 溢出防护：余额/累计消费累加会超出
+#     上限时拒绝更新（sqlite 算术溢出会静默转浮点）
+# 12. close() 幂等；close 之后调用数据接口抛 AccountClosedError
+#     （继承 RuntimeError，不会被各后端的 except DB-Error 吞掉）
+# 13. login 的 ip=None 未传时保留库中原 ip；非法 ip（非字符串/
+#     超 70 长度）按未传处理。mongo url 同时支持 mongodb:// 与
+#     mongodb+srv://（Atlas 等云托管的 SRV 格式）
 #
 #=====================================================================
 from __future__ import print_function
@@ -150,7 +129,7 @@ class AccountBase (object):
 
 	# 字符串列最大长度（与 DDL 的 VARCHAR 宽度一致）：sqlite 不强制列宽、
 	# mongo 无 schema、mysql 严格模式超长直接报错——三端行为不同，必须在
-	# 应用层入库前统一校验（见设计说明 12）
+	# 应用层入库前统一校验（见设计说明 9）
 	STR_FIELDS = {
 		'urs': 88, 'pass': 98, 'name': 32, 'mail': 88, 'mobile': 32,
 		'sign': 32, 'photo': 256, 'intro': 256, 'src': 16, 'ip': 70,
@@ -913,6 +892,7 @@ class AccountMySQL (AccountBase):
 			uri[k] = v
 		uri['charset'] = 'utf8'
 		uri['client_flag'] = client_flag
+		uri['autocommit'] = True	# 每条语句独立事务，见设计说明 10
 		self.__base = uri
 		self.__db = self.__argv.get('db', 'account')
 		if self.__argv.get('init', False):
@@ -938,16 +918,6 @@ class AccountMySQL (AccountBase):
 		self.__conn.ping(True)
 		return self.__conn.cursor()
 
-	# 只读操作结束后显式 commit 结束事务：autocommit 关闭时 SELECT 会开启
-	# REPEATABLE READ 一致性快照且一直不结束——只读连接会永远读到旧数据，
-	# 长事务还会阻碍 InnoDB purge。commit 失败（如断线）忽略即可，下次
-	# 操作 _cursor 的 ping 会自动重连
-	def _end_read (self):
-		try:
-			self.__conn.commit()
-		except MySQLdb.Error:
-			pass
-
 	# 初始化数据库与表格，结束后带 db 重连
 	def init (self):
 		database = self.__db
@@ -960,7 +930,6 @@ class AccountMySQL (AccountBase):
 			c.execute('CREATE DATABASE IF NOT EXISTS %s;' % database)
 			c.execute('USE %s;' % database)
 			c.execute(self.__table_sql(database))
-			self.__conn.commit()
 		finally:
 			c.close()
 		# 重新带 db 连接，保证 ping 重连后不会丢掉当前库
@@ -1060,7 +1029,6 @@ class AccountMySQL (AccountBase):
 				c.close()
 		except MySQLdb.Error:
 			return None
-		self._end_read()	# 结束只读事务，避免 REPEATABLE READ 快照陈旧
 		if record is None:
 			return None
 		if self._record_status(record) != 0:
@@ -1081,13 +1049,8 @@ class AccountMySQL (AccountBase):
 							(now, ip, urs))
 				finally:
 					c.close()
-				self.__conn.commit()
 			except MySQLdb.Error:
-				try:
-					self.__conn.rollback()
-				except MySQLdb.Error:
-					pass
-				# 登录统计失败不影响认证结果
+				pass	# 登录统计失败不影响认证结果
 		# 重新查询，返回更新后的最新数据
 		return self.query(urs = urs)
 
@@ -1118,7 +1081,6 @@ class AccountMySQL (AccountBase):
 				c.close()
 		except MySQLdb.Error:
 			return None
-		self._end_read()	# 结束只读事务，避免 REPEATABLE READ 快照陈旧
 		return self._record2obj(record)
 
 	# 用户注册，返回记录（参数校验失败/urs 已存在/数据库错误都返回 None）
@@ -1134,12 +1096,7 @@ class AccountMySQL (AccountBase):
 				c.execute(sql, (urs, passwd, name, gender, src, now))
 			finally:
 				c.close()
-			self.__conn.commit()
 		except MySQLdb.Error:
-			try:
-				self.__conn.rollback()
-			except MySQLdb.Error:
-				pass
 			return None
 		return self.query(urs = urs)
 
@@ -1167,12 +1124,7 @@ class AccountMySQL (AccountBase):
 				count = c.rowcount
 			finally:
 				c.close()
-			self.__conn.commit()
 		except MySQLdb.Error:
-			try:
-				self.__conn.rollback()
-			except MySQLdb.Error:
-				pass
 			return False
 		return count > 0
 
@@ -1200,7 +1152,6 @@ class AccountMySQL (AccountBase):
 					c.close()
 			except MySQLdb.Error:
 				return False
-			self._end_read()	# 结束只读事务，避免 REPEATABLE READ 快照陈旧
 			if record is None:
 				return False
 		if passwd is not None and passwd != old:
@@ -1212,12 +1163,7 @@ class AccountMySQL (AccountBase):
 					count = c.rowcount
 				finally:
 					c.close()
-				self.__conn.commit()
 			except MySQLdb.Error:
-				try:
-					self.__conn.rollback()
-				except MySQLdb.Error:
-					pass
 				return False
 			if count == 0:
 				return False
@@ -1252,12 +1198,7 @@ class AccountMySQL (AccountBase):
 				changed = c.rowcount
 			finally:
 				c.close()
-			self.__conn.commit()
 		except MySQLdb.Error:
-			try:
-				self.__conn.rollback()
-			except MySQLdb.Error:
-				pass
 			changed = 0
 		data = self.query(None, uid)
 		if data is None:
@@ -1292,12 +1233,7 @@ class AccountMySQL (AccountBase):
 				changed = c.rowcount
 			finally:
 				c.close()
-			self.__conn.commit()
 		except MySQLdb.Error:
-			try:
-				self.__conn.rollback()
-			except MySQLdb.Error:
-				pass
 			changed = 0
 		data = self.query(None, uid)
 		if data is None:
@@ -1323,12 +1259,7 @@ class AccountMySQL (AccountBase):
 				count = c.rowcount
 			finally:
 				c.close()
-			self.__conn.commit()
 		except MySQLdb.Error:
-			try:
-				self.__conn.rollback()
-			except MySQLdb.Error:
-				pass
 			return False
 		return count > 0
 
@@ -1343,7 +1274,6 @@ class AccountMySQL (AccountBase):
 				c.close()
 		except MySQLdb.Error:
 			return -1
-		self._end_read()	# 结束只读事务，避免 REPEATABLE READ 快照陈旧
 		return record[0] if record else 0
 
 	# 分页列出用户，按 uid 升序，返回字典列表（不含密码），出错返回 None
@@ -1364,7 +1294,6 @@ class AccountMySQL (AccountBase):
 				c.close()
 		except MySQLdb.Error:
 			return None
-		self._end_read()	# 结束只读事务，避免 REPEATABLE READ 快照陈旧
 		return [ self._record2obj(n) for n in records ]
 
 	# 封禁账户 (status=1)，封禁后无法登录/支付/充值
@@ -1388,12 +1317,7 @@ class AccountMySQL (AccountBase):
 				count = c.rowcount
 			finally:
 				c.close()
-			self.__conn.commit()
 		except MySQLdb.Error:
-			try:
-				self.__conn.rollback()
-			except MySQLdb.Error:
-				pass
 			return False
 		return count > 0
 
@@ -1415,7 +1339,6 @@ class AccountMySQL (AccountBase):
 						pass
 			finally:
 				c.close()
-			self.__conn.commit()
 		except MySQLdb.Error:
 			pass
 		return succeed
