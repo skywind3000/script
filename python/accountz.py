@@ -6,7 +6,7 @@
 # accountz.py - 账号存储：sqlite / mysql / mongo 三个后端
 #
 # Created by skywind on 2017/03/16
-# Last change: 2026/09/21 16:12:40
+# Last change: 2026/09/21 17:30:00
 #
 # 重要字段说明：
 #
@@ -43,13 +43,16 @@
 #     范围内的整数存成 Int32，不转的话存储类型与另两端不一致），
 #     自增计数器同样用 Int64
 # 12. 三端入库前统一过应用层校验（_register_error /
-#     _update_prepare）：字符串列按 DDL 宽度限长，urs/pass/name
-#     必填，gender 限 0/1/2，birthday 限 YYYY-MM-DD，misc 须
-#     可 JSON 序列化，cid 限 int64，level/exp/icon 限 int32（mysql
-#     INT 列宽），money 限 int64 正整数。DDL 的 CHECK/长度约束
-#     只有部分后端强制执行（sqlite 不限长、mongo 无 schema、
-#     MySQL 8.0.16 之前忽略 CHECK），只靠 DDL 会
-#     导致三端对同样的输入接受/拒绝行为不同
+#     _update_prepare / _passwd_error）：字符串列按 DDL 宽度
+#     限长（passwd() 的新密码同样受 pass 列宽约束），urs/pass/
+#     name 必填，gender 限 0/1/2，birthday 限 YYYY-MM-DD 且
+#     date/datetime 对象与非零填充串（如 '2020-1-2'）统一归一化
+#     后再入库（此前 sqlite 原样绑定、读回格式与另两端不一致），
+#     misc 须可 JSON 序列化，cid 限 int64，level/exp/icon 限
+#     int32（mysql INT 列宽），money 限 int64 正整数。DDL 的
+#     CHECK/长度约束只有部分后端强制执行（sqlite 不限长、
+#     mongo 无 schema、MySQL 8.0.16 之前忽略 CHECK），只靠
+#     DDL 会导致三端对同样的输入接受/拒绝行为不同
 # 13. mysql 读操作后显式 commit 结束事务（query/count/
 #     list_users 以及 login/passwd 的 SELECT）：autocommit 关闭时
 #     SELECT 会开启 REPEATABLE READ 快照且一直不结束，
@@ -257,6 +260,21 @@ class AccountBase (object):
 			error = self._str_error('src', src)
 		return error
 
+	# passwd() 参数校验（三端共用）：old 只参与比较不落库，仅查类型；
+	# 新密码会写入 pass 列（VARCHAR(98)），须过列宽校验——mysql 严格
+	# 模式对超长值报错而 sqlite/mongo 存得进，入口拒绝三端才一致。
+	# 合法返回 None，否则返回错误描述
+	def _passwd_error (self, old, passwd):
+		if old is None and passwd is None:
+			return 'old and passwd cannot both be None'
+		if old is not None and not isinstance(old, (str, unicode)):
+			return 'old must be a string: %s' % (repr(old),)
+		if passwd is not None and not isinstance(passwd, (str, unicode)):
+			return 'passwd must be a string: %s' % (repr(passwd),)
+		if passwd is not None:
+			return self._str_error('pass', passwd)
+		return None
+
 	# update() 单字段取值校验（只有白名单字段会进来）：cid 按 int64、
 	# level/exp/icon 按 int32、gender 按 0/1/2、birthday 必须是 None 或
 	# YYYY-MM-DD 字符串（或 date/datetime 对象）、misc 必须可 JSON 序列化、
@@ -294,9 +312,9 @@ class AccountBase (object):
 		return self._str_error(k, v, none_ok = (k != 'name'))
 
 	# update() 公共预处理：白名单过滤 + 逐字段校验 + misc 编码（SQL 后端
-	# 转 json 文本；mongo 传 dump_misc=False 保留原生文档直接存 BSON）。
-	# 任一字段非法或没有可更新字段返回 None，否则返回 (列名, 值) 两个列表。
-	# 三端 update() 都先走这里，保证接受/拒绝行为完全一致
+	# 转 json 文本）+ birthday 归一化。任一字段非法或没有可更新字段返回
+	# None，否则返回 (列名, 值) 两个列表。三端 update() 都先走这里，
+	# 保证接受/拒绝行为与存取格式完全一致
 	def _update_prepare (self, changes, dump_misc = True):
 		names, values = [], []
 		for k in changes:
@@ -307,6 +325,8 @@ class AccountBase (object):
 				return None
 			if k == 'misc' and v is not None and dump_misc:
 				v = self._misc_dump(v)
+			if k == 'birthday' and v is not None:
+				v = self._date_norm(v)
 			names.append(k)
 			values.append(v)
 		if not names:
@@ -371,6 +391,23 @@ class AccountBase (object):
 			except (ValueError, TypeError):
 				pass
 		return value
+
+	# birthday 归一化：date/datetime 对象或合法日期串统一转成零填充的
+	# 'YYYY-MM-DD' 文本。此前 sqlite 端直接绑定原始值（datetime 对象
+	# 经默认适配器变成带时间的串、'2020-1-2' 原样入库），读回格式与
+	# 截断归一的 mysql/mongo 不一致；归一化收口在入库前一处完成，
+	# 三端存取一致，sqlite 也不再依赖 3.12 起弃用的默认日期适配器。
+	# 解析失败/非日期输入原样返回（拒绝由 _update_value_error 负责）
+	def _date_norm (self, v):
+		if isinstance(v, (datetime.datetime, datetime.date)):
+			return '%04d-%02d-%02d' % (v.year, v.month, v.day)
+		if isinstance(v, (str, unicode)):
+			try:
+				d = datetime.datetime.strptime(v, '%Y-%m-%d')
+			except ValueError:
+				return v
+			return '%04d-%02d-%02d' % (d.year, d.month, d.day)
+		return v
 
 
 #----------------------------------------------------------------------
@@ -564,13 +601,10 @@ class AccountLocal (AccountBase):
 	# old != None, passwd == None -> 验证密码
 	# old != None, passwd != None -> 修改密码
 	# uid 可以是数字 uid 或者字符串 urs，账户不存在返回 False
+	# 新密码须为字符串且不超 pass 列宽（98），否则返回 False
 	def passwd (self, uid, old, passwd = None):
-		if old is None and passwd is None:
-			return False
-		if old is not None and not isinstance(old, (str, unicode)):
-			return False	# mysql 端字符串列与整数比较会隐式转型，统一拒绝非字符串
-		if passwd is not None and not isinstance(passwd, (str, unicode)):
-			return False
+		if self._passwd_error(old, passwd) is not None:
+			return False	# 参数校验三端统一（含 pass 列宽），见 _passwd_error
 		where = self._identify(uid)
 		if where is None:
 			return False
@@ -1147,13 +1181,10 @@ class AccountMySQL (AccountBase):
 	# old != None, passwd == None -> 验证密码
 	# old != None, passwd != None -> 修改密码
 	# uid 可以是数字 uid 或者字符串 urs，账户不存在返回 False
+	# 新密码须为字符串且不超 pass 列宽（98），否则返回 False
 	def passwd (self, uid, old, passwd = None):
-		if old is None and passwd is None:
-			return False
-		if old is not None and not isinstance(old, (str, unicode)):
-			return False	# 字符串列与整数比较会隐式转型，统一拒绝非字符串
-		if passwd is not None and not isinstance(passwd, (str, unicode)):
-			return False
+		if self._passwd_error(old, passwd) is not None:
+			return False	# 参数校验三端统一（含 pass 列宽），见 _passwd_error
 		where = self._identify(uid)
 		if where is None:
 			return False
@@ -1697,13 +1728,10 @@ class AccountMongo (AccountBase):
 	# old != None, passwd == None -> 验证密码
 	# old != None, passwd != None -> 修改密码
 	# uid 可以是数字 uid 或者字符串 urs，账户不存在返回 False
+	# 新密码须为字符串且不超 pass 列宽（98），否则返回 False
 	def passwd (self, uid, old, passwd = None):
-		if old is None and passwd is None:
-			return False
-		if old is not None and not isinstance(old, (str, unicode)):
-			return False	# 与 SQL 端对齐：非字符串一律拒绝
-		if passwd is not None and not isinstance(passwd, (str, unicode)):
-			return False
+		if self._passwd_error(old, passwd) is not None:
+			return False	# 参数校验三端统一（含 pass 列宽），见 _passwd_error
 		where = self._identify(uid)
 		if where is None:
 			return False
