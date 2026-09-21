@@ -286,7 +286,177 @@ SELECT app_id, first_login, last_login, status FROM user_app WHERE uid = ?;
 
 ---
 
-## 6. 安全补课（当前库的欠账）
+## 6. HTTP API 设计
+
+API 分四个平面，各自鉴权方式不同：
+
+| 平面 | 调用方 | 鉴权 | 阶段 |
+|---|---|---|---|
+| 私有 API `/v1/*` | 各产品服务端 / 产品内嵌 SDK | 服务签名 或 用户 Bearer token | 阶段 2 |
+| OIDC 端点 `/oauth2/*` | 用户浏览器 / 标准客户端库 | 协议内置 | 阶段 3 |
+| 内省端点 `/v1/introspect` | 各产品服务端 | 服务签名 | 阶段 2 |
+| 管理端点 `/v1/admin/*` | 运营后台 | 服务签名 + 员工身份，全量审计 | 阶段 4 |
+
+### 6.1 通用约定
+
+- JSON + UTF-8，路径带版本号 `/v1/`
+- **服务签名**（产品服务端调用）：请求头
+  `X-App-Id` / `X-Timestamp` / `X-Nonce` / `X-Signature`，
+  其中 `X-Signature = HMAC-SHA256(app_secret, method + path + timestamp + nonce + body_sha256)`；
+  timestamp 偏差超 5 分钟或 nonce 重放（Redis 记 5 分钟窗口）一律拒绝
+- **用户令牌**：`Authorization: Bearer <access_token>`（JWT，claims 含
+  `sub=open_id, app_id, ver=account.version`）
+- 统一错误格式：
+
+```json
+{ "code": 40101, "message": "invalid credential", "request_id": "req_8f3a2b" }
+```
+
+  错误码分段：`400xx` 参数/校验，`401xx` 认证，`403xx` 封禁/权限，
+  `404xx` 不存在，`409xx` 冲突（标识已占用），`429xx` 限流，`500xx` 内部错误
+- 写操作支持 `Idempotency-Key` 请求头（注册/发码等重试安全）
+- 所有请求分配 `request_id`，落访问日志与审计日志，便于跨系统排查
+
+### 6.2 私有 API（阶段 2，产品接入的主通道）
+
+#### 认证与会话
+
+```
+POST /v1/auth/login            密码直登（游戏/移动端无浏览器场景）
+POST /v1/auth/logout           登出：撤销当前 refresh_token
+POST /v1/auth/refresh          用 refresh_token 换新 access_token
+```
+
+`POST /v1/auth/login` 请求/响应示例：
+
+```json
+// 请求（服务签名 + 用户凭据）
+{
+    "identifier": "alice@example.com",   // 登录名/邮箱/手机号，服务端自动探测类型
+    "password": "...",                    // TLS 内明文；前端可选 RSA 预加密
+    "device_id": "d-9f8e...",             // 风控用，可选
+    "ip": "1.2.3.4"                       // 产品服务端透传真实用户 ip
+}
+
+// 200 响应
+{
+    "access_token": "eyJ...",             // JWT，5~15 分钟
+    "refresh_token": "rt_...",            // 30 天，可撤销
+    "expires_in": 900,
+    "open_id": "ga_x8f3a2...",            // 该产品内用户标识
+    "profile": { "name": "alice", "gender": 2, "realname": 1 }
+}
+
+// 403 响应（封禁时明确告知，供产品提示用户）
+{ "code": 40301, "message": "account banned", "scope": "global" }
+```
+
+登录失败统一返回 `40101 invalid credential`——**不区分"用户不存在"和
+"密码错误"**，防止账号枚举；MFA 开启时返回 `200 + mfa_required + 临时票据`，
+客户端再调 `POST /v1/auth/mfa` 提交 TOTP 码完成登录。
+
+#### 注册与账号
+
+```
+POST   /v1/users                      注册（identifier + password + app_id）
+GET    /v1/users/me                   当前用户资料（按 token 的 scope 过滤字段）
+PATCH  /v1/users/me                   改资料（name/gender/birthday/misc）
+POST   /v1/users/me/password          改密码（old + new；成功后 version+1，
+                                      所有已签发 token 失效 = 全端下线）
+POST   /v1/users/me/delete            申请注销（进入冷静期，status=3）
+DELETE /v1/users/me/delete            撤销注销申请（冷静期内）
+```
+
+#### 登录标识管理（identifiers 表的 API 面）
+
+```
+GET    /v1/users/me/identifiers             列出已绑定的登录方式
+POST   /v1/users/me/identifiers             绑定新标识（需验证码或密码确认）
+DELETE /v1/users/me/identifiers/{id_type}   解绑（须保证至少剩一种可登录方式）
+```
+
+#### 验证码（找回/绑定/注册共用一套）
+
+```
+POST /v1/codes/send      { scene: "reset"|"bind"|"register", channel: "mail"|"sms", target }
+POST /v1/codes/verify    { scene, channel, target, code }
+```
+
+  频控：同 target 60 秒一发、每日上限；同 ip 每小时上限；scene 绑定用途，
+  注册码不能拿来重置密码。验证码只存哈希、5 分钟过期、验错 5 次作废。
+
+#### 密码重置
+
+```
+POST /v1/password/reset   { target, code, new_password }   // 走验证码流程
+```
+
+#### MFA
+
+```
+POST /v1/users/me/mfa/setup     生成 TOTP secret + otpauth:// URI（含二维码内容）
+POST /v1/users/me/mfa/enable    提交一次 TOTP 码确认绑定
+POST /v1/users/me/mfa/disable   需密码或验证码确认
+```
+
+### 6.3 内省端点（产品服务端验 token）
+
+产品拿到用户带来的 JWT 后，本地验签即可（JWKS 公钥），**无需每次调账号服务**；
+只在需要实时状态（封禁即时生效、version 校验）时调内省：
+
+```
+POST /v1/introspect
+请求:  { "token": "eyJ..." }
+响应:  { "active": true, "open_id": "ga_x8f3a2...", "app_id": "game-a",
+         "scope": "profile", "ver": 3, "status": 0, "realname": 1 }
+```
+
+  `active=false` 时给出 `reason`（expired/revoked/banned/version_stale）。
+
+### 6.4 OIDC 标准端点（阶段 3，Web SSO 走这里）
+
+```
+GET  /.well-known/openid-configuration    发现文档
+GET  /oauth2/jwks                          验签公钥（支持轮转，kid 标识）
+GET  /oauth2/authorize                     授权页（统一登录 UI 挂这里）
+POST /oauth2/token                         authorization_code(+PKCE) / refresh_token
+GET  /oauth2/userinfo                      标准 claims，按 scope 返回
+POST /oauth2/revoke                        撤销 token
+```
+
+  私有 API 的 `/v1/auth/login`（游戏/移动端直登）与 OIDC（Web 浏览器流）
+  并存，背后是同一套账号存储和 token 体系。
+
+### 6.5 管理端点（阶段 4，运营后台专用）
+
+```
+GET  /v1/admin/users?identifier=|uid=|mobile=     查账号（模糊查询须审计）
+GET  /v1/admin/users/{uid}                        详情 + 全部 identifiers + user_app
+POST /v1/admin/users/{uid}/ban                    全局封禁 { reason, duration }
+POST /v1/admin/users/{uid}/unban
+POST /v1/admin/apps/{app_id}/users/{open_id}/ban  单产品封禁（改 user_app.status）
+CRUD /v1/admin/apps                               产品接入管理（secret 重置/回调地址）
+GET  /v1/admin/audit?uid=|app_id=|op=             审计日志查询
+```
+
+  管理端点一律：独立权限校验（员工 SSO + 角色）、写操作全量落审计表、
+  敏感字段（mobile/mail）默认脱敏返回，查看明文需二次授权并记审计。
+
+### 6.6 限流与风控挂点
+
+| 端点类别 | 限流维度 | 参考阈值 |
+|---|---|---|
+| login / codes/send | ip + identifier + device_id | 5 次/分钟后阶梯锁定 |
+| register | ip + device_id | 10 次/小时 |
+| 其余用户端点 | open_id | 60 次/分钟 |
+| introspect / 产品服务签名 | app_id | 按接入协议约定配额 |
+
+超限返回 `42901` + `Retry-After`。风控引擎（阶段 4）以中间件形式挂在
+login/register/codes 三个高危端点上，对 API 形状无侵入。
+
+---
+
+## 7. 安全补课（当前库的欠账）
 
 | 项 | 现状 | 目标 |
 |---|---|---|
@@ -301,7 +471,7 @@ SELECT app_id, first_login, last_login, status FROM user_app WHERE uid = ?;
 
 ---
 
-## 7. 工程形态
+## 8. 工程形态
 
 - **连接池**：现 `AccountMySQL` 单连接 + RLock 全局串行化，服务化后是第一个
   瓶颈，换连接池（每请求一连接）
@@ -317,7 +487,7 @@ SELECT app_id, first_login, last_login, status FROM user_app WHERE uid = ?;
 
 ---
 
-## 8. 分阶段路线
+## 9. 分阶段路线
 
 | 阶段 | 内容 | 产出 |
 |---|---|---|
@@ -330,7 +500,7 @@ SELECT app_id, first_login, last_login, status FROM user_app WHERE uid = ?;
 
 ---
 
-## 9. 现有代码的资产盘点
+## 10. 现有代码的资产盘点
 
 可直接带进新架构的部分：
 
