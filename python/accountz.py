@@ -6,7 +6,7 @@
 # accountz.py - 账号存储：sqlite / mysql / mongo 三个后端
 #
 # Created by skywind on 2017/03/16
-# Last change: 2026/09/21 18:40:00
+# Last change: 2026/09/21 19:36:00
 #
 # 重要字段说明：
 #
@@ -48,6 +48,10 @@
 # 13. login 的 ip=None 未传时保留库中原 ip；非法 ip（非字符串/
 #     超 70 长度）按未传处理。mongo url 同时支持 mongodb:// 与
 #     mongodb+srv://（Atlas 等云托管的 SRV 格式）
+# 14. 数据库异常不再无声吞掉：except DB-Error 返回 None/False 前先经
+#     _db_error() 记入模块 logger（默认 NullHandler 静默，应用配置好
+#     logging 即可观测）；payment/deposit 遇数据库故障返回新错误码 5
+#     （本次未生效或状态未知），不再误报 1=用户不存在
 #
 #=====================================================================
 from __future__ import print_function
@@ -58,11 +62,18 @@ import datetime
 import sqlite3
 import decimal
 import threading
+import logging
 
 try:
 	import json
 except ImportError:
 	import simplejson as json
+
+# 模块 logger：被吞掉的数据库异常统一经 AccountBase._db_error() 记到
+# 这里。默认挂 NullHandler 完全静默（库不替应用做输出决策），应用层
+# 配置好 logging（如 logging.basicConfig()）即可观测
+log = logging.getLogger(__name__)
+log.addHandler(logging.NullHandler())
 
 MySQLdb = None
 _MySQLdb_is_pymysql = False		# True: 正在使用 PyMySQL 的 MySQLdb 兼容层
@@ -154,6 +165,16 @@ class AccountBase (object):
 		for i, v in enumerate(self.FIELDS):
 			self._names[v] = i
 		self._updatable = set(self.UPDATABLE)
+
+	# 统一记录被吞掉的数据库异常，须在 except 块内调用（exc_info 取当前
+	# 异常上下文）：三端所有 except DB-Error 决定返回 None/False 前先经
+	# 这里留痕，返回语义不变、故障可观测（默认静默，见设计说明 14）。
+	# warn=True 用于不影响主结果的次要失败（如 login 的登录统计更新），
+	# 记 WARNING 而非 ERROR
+	def _db_error (self, method, warn = False):
+		log.log(logging.WARNING if warn else logging.ERROR,
+			'%s.%s: database error', type(self).__name__, method,
+			exc_info = True)
 
 	# 检查金额参数（单位：分，必须是非 0 整数），无错误返回 None，
 	# 有错误返回 (-1, 0, 原因) 元组
@@ -474,6 +495,7 @@ class AccountLocal (AccountBase):
 					c.execute('select * from account where urs = ? and pass = ?;', (urs, passwd))
 				record = c.fetchone()
 			except sqlite3.Error:
+				self._db_error('login')
 				return None
 			finally:
 				c.close()
@@ -496,7 +518,7 @@ class AccountLocal (AccountBase):
 					self.__conn.commit()
 				except sqlite3.Error:
 					self.__conn.rollback()
-					# 登录统计失败不影响认证结果
+					self._db_error('login', warn = True)	# 统计失败不影响认证
 			# 重新查询，返回更新后的最新数据
 			return self.query(urs = urs)
 
@@ -524,6 +546,7 @@ class AccountLocal (AccountBase):
 					c.execute('select * from account where urs = ? and uid = ?;', (urs, uid))
 				record = c.fetchone()
 			except sqlite3.Error:
+				self._db_error('query')
 				return None
 			finally:
 				c.close()
@@ -541,8 +564,12 @@ class AccountLocal (AccountBase):
 			try:
 				self.__conn.execute(sql, (urs, passwd, name, gender, src, now))
 				self.__conn.commit()
+			except sqlite3.IntegrityError:
+				self.__conn.rollback()
+				return None		# urs 撞唯一约束：业务性拒绝，不记错误日志
 			except sqlite3.Error:
 				self.__conn.rollback()
+				self._db_error('register')
 				return None
 			return self.query(urs = urs)
 
@@ -572,6 +599,7 @@ class AccountLocal (AccountBase):
 				self.__conn.commit()
 			except sqlite3.Error:
 				self.__conn.rollback()
+				self._db_error('update')
 				return False
 		return count > 0
 
@@ -597,6 +625,7 @@ class AccountLocal (AccountBase):
 						(value, old))
 					record = c.fetchone()
 				except sqlite3.Error:
+					self._db_error('passwd')
 					return False
 				finally:
 					c.close()
@@ -611,6 +640,7 @@ class AccountLocal (AccountBase):
 					self.__conn.commit()
 				except sqlite3.Error:
 					self.__conn.rollback()
+					self._db_error('passwd')
 					return False
 				if count == 0:
 					return False
@@ -618,7 +648,8 @@ class AccountLocal (AccountBase):
 
 	# 支付钱，kind为 'credit'或 'gold'，money是需要支付的钱数（单位：分，必须是大于 0 的整数）
 	# 返回 (结果, 还有多少钱, 错误原因)
-	# 结果=0支付成功，1用户不存在，2钱不够，3未知错误，4账户封禁，-1参数错误
+	# 结果=0支付成功，1用户不存在，2钱不够，3未知错误，4账户封禁，
+	# 5数据库故障（本次未生效或状态未知，先看日志再决定是否重试），-1参数错误
 	def payment (self, uid, kind, money):
 		error = self._money_error(kind, money)
 		if error is not None:
@@ -636,6 +667,7 @@ class AccountLocal (AccountBase):
 		sql = ('UPDATE account SET %s = %s - ?, %s = %s + ? '
 			'WHERE uid = ? and %s >= ? and IFNULL(status, 0) = 0 and %s <= ?;')
 		sql = sql % (x1, x1, x2, x2, x1, x2)
+		dberror = False
 		with self.__lock:
 			self.__check_open()
 			changes = self.__conn.total_changes
@@ -645,9 +677,17 @@ class AccountLocal (AccountBase):
 				self.__conn.commit()
 			except sqlite3.Error:
 				self.__conn.rollback()
+				dberror = True
+				self._db_error('payment')
 			changed = self.__conn.total_changes - changes
+		if dberror:
+			# UPDATE 阶段已失败：本次支付确定未生效，直接报数据库故障
+			return (5, 0, 'database error')
 		data = self.query(None, uid)
 		if data is None:
+			if changed > 0:
+				# 扣款已成功却查不回记录：连接中途故障或并发删号，状态未知
+				return (5, 0, 'database error')
 			return (1, 0, 'bad uid %s' % (repr(uid),))
 		if changed == 0:
 			if (data.get('status') or 0) != 0:
@@ -658,6 +698,8 @@ class AccountLocal (AccountBase):
 		return (0, data[x1], 'ok')
 
 	# 存钱，kind为 'credit'或 'gold'，money是需要增加的钱数（单位：分，必须是大于 0 的整数）
+	# 返回 (结果, 还有多少钱, 错误原因)：0成功，1用户不存在，2失败（余额将溢出
+	# int64/未知错误），4账户封禁，5数据库故障（同 payment），-1参数错误
 	def deposit (self, uid, kind, money):
 		error = self._money_error(kind, money)
 		if error is not None:
@@ -671,6 +713,7 @@ class AccountLocal (AccountBase):
 		sql = ('UPDATE account SET %s = %s + ? '
 			'WHERE uid = ? and IFNULL(status, 0) = 0 and %s <= ?;')
 		sql = sql % (kind, kind, kind)
+		dberror = False
 		with self.__lock:
 			self.__check_open()
 			changes = self.__conn.total_changes
@@ -679,9 +722,17 @@ class AccountLocal (AccountBase):
 				self.__conn.commit()
 			except sqlite3.Error:
 				self.__conn.rollback()
+				dberror = True
+				self._db_error('deposit')
 			changed = self.__conn.total_changes - changes
+		if dberror:
+			# UPDATE 阶段已失败：本次入账确定未生效，直接报数据库故障
+			return (5, 0, 'database error')
 		data = self.query(None, uid)
 		if data is None:
+			if changed > 0:
+				# 入账已成功却查不回记录：连接中途故障或并发删号，状态未知
+				return (5, 0, 'database error')
 			return (1, 0, 'bad uid %s' % (repr(uid),))
 		if changed == 0:
 			if (data.get('status') or 0) != 0:
@@ -706,6 +757,7 @@ class AccountLocal (AccountBase):
 				self.__conn.commit()
 			except sqlite3.Error:
 				self.__conn.rollback()
+				self._db_error('delete')
 				return False
 		return count > 0
 
@@ -718,6 +770,7 @@ class AccountLocal (AccountBase):
 				record = c.fetchone()
 				c.close()
 			except sqlite3.Error:
+				self._db_error('count')
 				return -1
 		return record[0] if record else 0
 
@@ -736,6 +789,7 @@ class AccountLocal (AccountBase):
 				c.execute('SELECT * FROM account ORDER BY uid LIMIT ? OFFSET ?;', (limit, offset))
 				records = c.fetchall()
 			except sqlite3.Error:
+				self._db_error('list_users')
 				return None
 			finally:
 				c.close()
@@ -764,6 +818,7 @@ class AccountLocal (AccountBase):
 				self.__conn.commit()
 			except sqlite3.Error:
 				self.__conn.rollback()
+				self._db_error('ban/unban')
 				return False
 		return count > 0
 
@@ -781,7 +836,7 @@ class AccountLocal (AccountBase):
 					self.__conn.execute(sql, (urs, name, '****', i % 3, now))
 					succeed += 1
 				except sqlite3.IntegrityError:
-					pass
+					pass		# 撞唯一约束：业务性跳过
 			self.__conn.commit()
 		return succeed
 
@@ -1028,6 +1083,7 @@ class AccountMySQL (AccountBase):
 			finally:
 				c.close()
 		except MySQLdb.Error:
+			self._db_error('login')
 			return None
 		if record is None:
 			return None
@@ -1050,7 +1106,7 @@ class AccountMySQL (AccountBase):
 				finally:
 					c.close()
 			except MySQLdb.Error:
-				pass	# 登录统计失败不影响认证结果
+				self._db_error('login', warn = True)	# 统计失败不影响认证
 		# 重新查询，返回更新后的最新数据
 		return self.query(urs = urs)
 
@@ -1080,6 +1136,7 @@ class AccountMySQL (AccountBase):
 			finally:
 				c.close()
 		except MySQLdb.Error:
+			self._db_error('query')
 			return None
 		return self._record2obj(record)
 
@@ -1096,7 +1153,10 @@ class AccountMySQL (AccountBase):
 				c.execute(sql, (urs, passwd, name, gender, src, now))
 			finally:
 				c.close()
+		except MySQLdb.IntegrityError:
+			return None		# urs 撞唯一约束：业务性拒绝，不记错误日志
 		except MySQLdb.Error:
+			self._db_error('register')
 			return None
 		return self.query(urs = urs)
 
@@ -1125,6 +1185,7 @@ class AccountMySQL (AccountBase):
 			finally:
 				c.close()
 		except MySQLdb.Error:
+			self._db_error('update')
 			return False
 		return count > 0
 
@@ -1151,6 +1212,7 @@ class AccountMySQL (AccountBase):
 				finally:
 					c.close()
 			except MySQLdb.Error:
+				self._db_error('passwd')
 				return False
 			if record is None:
 				return False
@@ -1164,6 +1226,7 @@ class AccountMySQL (AccountBase):
 				finally:
 					c.close()
 			except MySQLdb.Error:
+				self._db_error('passwd')
 				return False
 			if count == 0:
 				return False
@@ -1171,7 +1234,8 @@ class AccountMySQL (AccountBase):
 
 	# 支付钱，kind为 'credit'或 'gold'，money是需要支付的钱数（单位：分，必须是大于 0 的整数）
 	# 返回 (结果, 还有多少钱, 错误原因)
-	# 结果=0支付成功，1用户不存在，2钱不够，3未知错误，4账户封禁，-1参数错误
+	# 结果=0支付成功，1用户不存在，2钱不够，3未知错误，4账户封禁，
+	# 5数据库故障（本次未生效或状态未知，先看日志再决定是否重试），-1参数错误
 	def payment (self, uid, kind, money):
 		error = self._money_error(kind, money)
 		if error is not None:
@@ -1190,6 +1254,7 @@ class AccountMySQL (AccountBase):
 			'WHERE uid = %%s and %s >= %%s and IFNULL(status, 0) = 0 and %s <= %%s;')
 		sql = sql % (x1, x1, x2, x2, x1, x2)
 		changed = 0
+		dberror = False
 		try:
 			c = self._cursor()
 			try:
@@ -1199,9 +1264,16 @@ class AccountMySQL (AccountBase):
 			finally:
 				c.close()
 		except MySQLdb.Error:
-			changed = 0
+			dberror = True
+			self._db_error('payment')
+		if dberror:
+			# UPDATE 阶段已失败：本次支付确定未生效，直接报数据库故障
+			return (5, 0, 'database error')
 		data = self.query(None, uid)
 		if data is None:
+			if changed > 0:
+				# 扣款已成功却查不回记录：连接中途故障或并发删号，状态未知
+				return (5, 0, 'database error')
 			return (1, 0, 'bad uid %s' % (repr(uid),))
 		if changed == 0:
 			if (data.get('status') or 0) != 0:
@@ -1212,6 +1284,8 @@ class AccountMySQL (AccountBase):
 		return (0, data[x1], 'ok')
 
 	# 存钱，kind为 'credit'或 'gold'，money是需要增加的钱数（单位：分，必须是大于 0 的整数）
+	# 返回 (结果, 还有多少钱, 错误原因)：0成功，1用户不存在，2失败（余额将溢出
+	# int64/未知错误），4账户封禁，5数据库故障（同 payment），-1参数错误
 	def deposit (self, uid, kind, money):
 		error = self._money_error(kind, money)
 		if error is not None:
@@ -1226,6 +1300,7 @@ class AccountMySQL (AccountBase):
 			'WHERE uid = %%s and IFNULL(status, 0) = 0 and %s <= %%s;')
 		sql = sql % (kind, kind, kind)
 		changed = 0
+		dberror = False
 		try:
 			c = self._cursor()
 			try:
@@ -1234,9 +1309,16 @@ class AccountMySQL (AccountBase):
 			finally:
 				c.close()
 		except MySQLdb.Error:
-			changed = 0
+			dberror = True
+			self._db_error('deposit')
+		if dberror:
+			# UPDATE 阶段已失败：本次入账确定未生效，直接报数据库故障
+			return (5, 0, 'database error')
 		data = self.query(None, uid)
 		if data is None:
+			if changed > 0:
+				# 入账已成功却查不回记录：连接中途故障或并发删号，状态未知
+				return (5, 0, 'database error')
 			return (1, 0, 'bad uid %s' % (repr(uid),))
 		if changed == 0:
 			if (data.get('status') or 0) != 0:
@@ -1260,6 +1342,7 @@ class AccountMySQL (AccountBase):
 			finally:
 				c.close()
 		except MySQLdb.Error:
+			self._db_error('delete')
 			return False
 		return count > 0
 
@@ -1273,6 +1356,7 @@ class AccountMySQL (AccountBase):
 			finally:
 				c.close()
 		except MySQLdb.Error:
+			self._db_error('count')
 			return -1
 		return record[0] if record else 0
 
@@ -1293,6 +1377,7 @@ class AccountMySQL (AccountBase):
 			finally:
 				c.close()
 		except MySQLdb.Error:
+			self._db_error('list_users')
 			return None
 		return [ self._record2obj(n) for n in records ]
 
@@ -1318,6 +1403,7 @@ class AccountMySQL (AccountBase):
 			finally:
 				c.close()
 		except MySQLdb.Error:
+			self._db_error('ban/unban')
 			return False
 		return count > 0
 
@@ -1335,12 +1421,14 @@ class AccountMySQL (AccountBase):
 					try:
 						c.execute(sql, (urs, name, '****', i % 3, now))
 						succeed += 1
+					except MySQLdb.IntegrityError:
+						pass		# 撞唯一约束：业务性跳过
 					except MySQLdb.Error:
-						pass
+						self._db_error('population')
 			finally:
 				c.close()
 		except MySQLdb.Error:
-			pass
+			self._db_error('population')
 		return succeed
 
 
@@ -1529,6 +1617,7 @@ class AccountMongo (AccountBase):
 			else:
 				cc = account.find_one({'urs': urs, 'pass': passwd})
 		except pymongo.errors.PyMongoError:
+			self._db_error('login')
 			return None
 		if cc is None:
 			return None
@@ -1542,7 +1631,7 @@ class AccountMongo (AccountBase):
 				account.update_one({'_id': cc['_id']},
 					{'$set': setting, '$inc': {'LoginTimes': 1}})
 			except pymongo.errors.PyMongoError:
-				pass
+				self._db_error('login', warn = True)	# 统计失败不影响认证
 		# 重新查询，返回更新后的最新数据
 		return self.query(urs = urs)
 
@@ -1568,6 +1657,7 @@ class AccountMongo (AccountBase):
 			else:
 				cc = account.find_one({'uid': uid, 'urs': urs})
 		except pymongo.errors.PyMongoError:
+			self._db_error('query')
 			return None
 		if cc is None:
 			return None
@@ -1585,7 +1675,8 @@ class AccountMongo (AccountBase):
 		try:
 			cc = account.find_one({'urs': urs}, {'_id': True})
 		except pymongo.errors.PyMongoError:
-			return None
+			self._db_error('register')
+			return None		# 返回 None 与「已存在」同形，靠日志区分
 		if cc is not None:
 			return None
 		cc = self.__obj_complete({})
@@ -1607,7 +1698,10 @@ class AccountMongo (AccountBase):
 		self.__int64_fix(cc)		# uid/cid 以 BSON Int64 存储
 		try:
 			account.insert_one(cc)
-		except (pymongo.errors.DuplicateKeyError, pymongo.errors.PyMongoError):
+		except pymongo.errors.DuplicateKeyError:
+			return None		# 并发注册撞唯一索引：业务性拒绝，不记错误日志
+		except pymongo.errors.PyMongoError:
+			self._db_error('register')
 			return None
 		return self.query(urs = urs)
 
@@ -1643,6 +1737,7 @@ class AccountMongo (AccountBase):
 		try:
 			result = self.__account.update_one({column: value}, {'$set': setting})
 		except pymongo.errors.PyMongoError:
+			self._db_error('update')
 			return False
 		return result.matched_count > 0
 
@@ -1665,6 +1760,7 @@ class AccountMongo (AccountBase):
 			try:
 				cc = account.find_one({column: value, 'pass': old})
 			except pymongo.errors.PyMongoError:
+				self._db_error('passwd')
 				return False
 			if cc is None:
 				return False
@@ -1672,6 +1768,7 @@ class AccountMongo (AccountBase):
 			try:
 				result = account.update_one({column: value}, {'$set': {'pass': passwd}})
 			except pymongo.errors.PyMongoError:
+				self._db_error('passwd')
 				return False
 			if result.matched_count == 0:
 				return False
@@ -1679,7 +1776,8 @@ class AccountMongo (AccountBase):
 
 	# 支付钱，kind为 'credit'或 'gold'，money是需要支付的钱数（单位：分，必须是大于 0 的整数）
 	# 返回 (结果, 还有多少钱, 错误原因)
-	# 结果=0支付成功，1用户不存在，2钱不够，3未知错误，4账户封禁，-1参数错误
+	# 结果=0支付成功，1用户不存在，2钱不够，3未知错误，4账户封禁，
+	# 5数据库故障（本次未生效或状态未知，先看日志再决定是否重试），-1参数错误
 	def payment (self, uid, kind, money):
 		error = self._money_error(kind, money)
 		if error is not None:
@@ -1704,12 +1802,20 @@ class AccountMongo (AccountBase):
 			consumed: {'$not': {'$gt': self.INT64_MAX - money}}}
 		self.__check_open()
 		hh = None
+		dberror = False
 		try:
 			hh = self.__account.find_one_and_update(query, {'$inc': inc})
 		except pymongo.errors.PyMongoError:
-			hh = None
+			dberror = True
+			self._db_error('payment')
+		if dberror:
+			# 更新阶段已失败：本次支付确定未生效，直接报数据库故障
+			return (5, 0, 'database error')
 		data = self.query(None, uid)
 		if data is None:
+			if hh is not None:
+				# 扣款已命中（hh 是更新前文档）却查不回记录：状态未知
+				return (5, 0, 'database error')
 			return (1, 0, 'bad uid %s' % (repr(uid),))
 		if hh is None:
 			if (data.get('status') or 0) != 0:
@@ -1720,6 +1826,8 @@ class AccountMongo (AccountBase):
 		return (0, data[kind], 'ok')
 
 	# 存钱，kind为 'credit'或 'gold'，money是需要增加的钱数（单位：分，必须是大于 0 的整数）
+	# 返回 (结果, 还有多少钱, 错误原因)：0成功，1用户不存在，2失败（余额将溢出
+	# int64/未知错误），4账户封禁，5数据库故障（同 payment），-1参数错误
 	def deposit (self, uid, kind, money):
 		error = self._money_error(kind, money)
 		if error is not None:
@@ -1734,12 +1842,20 @@ class AccountMongo (AccountBase):
 			kind: {'$not': {'$gt': self.INT64_MAX - money}}}
 		self.__check_open()
 		hh = None
+		dberror = False
 		try:
 			hh = self.__account.find_one_and_update(query, {'$inc': {kind: money}})
 		except pymongo.errors.PyMongoError:
-			hh = None
+			dberror = True
+			self._db_error('deposit')
+		if dberror:
+			# 更新阶段已失败：本次入账确定未生效，直接报数据库故障
+			return (5, 0, 'database error')
 		data = self.query(None, uid)
 		if data is None:
+			if hh is not None:
+				# 入账已命中（hh 是更新前文档）却查不回记录：状态未知
+				return (5, 0, 'database error')
 			return (1, 0, 'bad uid %s' % (repr(uid),))
 		if hh is None:
 			if (data.get('status') or 0) != 0:
@@ -1759,6 +1875,7 @@ class AccountMongo (AccountBase):
 		try:
 			result = self.__account.delete_one({column: value})
 		except pymongo.errors.PyMongoError:
+			self._db_error('delete')
 			return False
 		return result.deleted_count > 0
 
@@ -1768,6 +1885,7 @@ class AccountMongo (AccountBase):
 		try:
 			return self.__account.count_documents({})
 		except pymongo.errors.PyMongoError:
+			self._db_error('count')
 			return -1
 
 	# 分页列出用户，按 uid 升序，返回字典列表（不含密码），出错返回 None
@@ -1788,6 +1906,7 @@ class AccountMongo (AccountBase):
 					del cc['_id']
 				users.append(cc)
 		except pymongo.errors.PyMongoError:
+			self._db_error('list_users')
 			return None
 		return users
 
@@ -1808,6 +1927,7 @@ class AccountMongo (AccountBase):
 		try:
 			result = self.__account.update_one({column: value}, {'$set': {'status': status}})
 		except pymongo.errors.PyMongoError:
+			self._db_error('ban/unban')
 			return False
 		return result.matched_count > 0
 
@@ -2148,7 +2268,16 @@ def populate_fake_data (db, count, seed = None, verbose = False, locale = 'zh_CN
 # testing
 #----------------------------------------------------------------------
 if __name__ == '__main__':
-	my = {'host':'xnode3.ddns.net', 'user':'skywind', 'passwd':'678900', 'db':'skywind_t9'}
+	# 测试连接参数从环境变量读取，凭据不进仓库（已在历史提交里出现过的
+	# 密码请尽快轮换）：
+	#   ACCOUNTZ_MYSQL_HOST / ACCOUNTZ_MYSQL_USER / ACCOUNTZ_MYSQL_PASSWD /
+	#   ACCOUNTZ_MYSQL_DB / ACCOUNTZ_MONGO_URL
+	my = {
+		'host': os.environ.get('ACCOUNTZ_MYSQL_HOST', '127.0.0.1'),
+		'user': os.environ.get('ACCOUNTZ_MYSQL_USER', 'root'),
+		'passwd': os.environ.get('ACCOUNTZ_MYSQL_PASSWD', ''),
+		'db': os.environ.get('ACCOUNTZ_MYSQL_DB', 'accountz'),
+	}
 	def test1():
 		if os.path.exists('accountz.db'):
 			os.remove('accountz.db')
@@ -2212,7 +2341,7 @@ if __name__ == '__main__':
 		print(db.passwd(uid, None, '1234'))
 		return 0
 	def test3():
-		url = 'mongodb://xnode3.ddns.net/skywind'
+		url = os.environ.get('ACCOUNTZ_MONGO_URL', 'mongodb://127.0.0.1/skywind')
 		t = time.time()
 		db = AccountMongo(url, True)
 		print(time.time() - t)
