@@ -1,9 +1,9 @@
-// build Éú³ÉµÄÎÄ¼ş, ÇëÎğÖ±½Ó±à¼­´ËÎÄ¼ş
+// build ç”Ÿæˆçš„æ–‡ä»¶, è¯·å‹¿ç›´æ¥ç¼–è¾‘æ­¤æ–‡ä»¶
 // ==UserScript==
-// @name         Ğ¡ËµÏÂÔØ
+// @name         å°è¯´ä¸‹è½½
 // @namespace    http://tampermonkey.net/
 // @version      2025072010
-// @description  AKĞ¡Ëµ, ÀÇÈËĞ¡ËµÏÂÔØ, °²×°½Å±¾ºó´ò¿ªĞ¡ËµÄ¿Â¼Ò³Ãæ,µã»÷ÏÂÔØ
+// @description  AKå°è¯´, ç‹¼äººå°è¯´ä¸‹è½½, å®‰è£…è„šæœ¬åæ‰“å¼€å°è¯´ç›®å½•é¡µé¢,ç‚¹å‡»ä¸‹è½½
 // @author       bingxl
 // @homepage     https://github.com/bingxl/tampermonkey
 // @match        https://www.langrenxiaoshuo.com/html/*/
@@ -168,11 +168,11 @@
         }
     </style>
 
-    <section class="toggle">ÊÕÆğ</section>
+    <section class="toggle">æ”¶èµ·</section>
     <div class="container">
         <header class="header">
-            <button class="bingxl_download">ÏÂÔØ</button>
-            <button class="clear">Çå³ıÈÕÖ¾</button>
+            <button class="bingxl_download">ä¸‹è½½</button>
+            <button class="clear">æ¸…é™¤æ—¥å¿—</button>
         </header>
         <progress value="0" class="bingxl_progress"></progress>
 
@@ -252,9 +252,9 @@
     }
     run = async (e) => {
       e?.preventDefault();
-      this.log("Ö´ĞĞÏÂÔØº¯Êı");
+      this.log("æ‰§è¡Œä¸‹è½½å‡½æ•°");
       const article = document.querySelector(this.title)?.textContent ?? "";
-      this.store = new IDB({ dbName: article || "Ğ¡ËµÃû" });
+      this.store = new IDB({ dbName: article || "å°è¯´å" });
       await this.clear();
       let articleKey = "" + Date.now();
       this.storeContent(0, articleKey, article);
@@ -348,11 +348,11 @@ ${res}`;
       });
       this.root?.querySelector(".bingxl_toggle")?.addEventListener("click", () => {
         const text = this.root?.querySelector(".bingxl_toggle")?.textContent;
-        if (text === "ÊÕÆğ") {
-          this.root.querySelector(".bingxl_toggle").textContent = "Õ¹¿ª";
+        if (text === "æ”¶èµ·") {
+          this.root.querySelector(".bingxl_toggle").textContent = "å±•å¼€";
           this.root.querySelector(".container").classList.add("hidden");
         } else {
-          this.root.querySelector(".bingxl_toggle").textContent = "ÊÕÆğ";
+          this.root.querySelector(".bingxl_toggle").textContent = "æ”¶èµ·";
           this.root.querySelector(".container").classList.remove("hidden");
         }
       });
@@ -378,7 +378,7 @@ ${res}`;
     download = "body > div.container > section > div.novel_info_main > div > div:nth-child(5) > a.l_btn";
     static host = ["https://www.06ak.com/book/*"];
     static pathMatch = /\/book\/\d+$/;
-    static siteName = "06AkĞ¡Ëµ";
+    static siteName = "06Akå°è¯´";
     getArticleContent(parser) {
       return Array.from(parser.querySelectorAll("#article>p")).map((a) => a.textContent + `
 `).join("");
@@ -399,7 +399,7 @@ ${res}`;
     download = "div.introduce > div > p:nth-child(4) > a";
     static host = ["https://www.diyibanzhu.buzz/*/*/"];
     static pathMatch = /\/\d+\/\d+\/$/;
-    static siteName = "µÚÒ»°æÖ÷";
+    static siteName = "ç¬¬ä¸€ç‰ˆä¸»";
     async getArticle(url) {
       return await fetch(url).then((res) => res.arrayBuffer()).then((res) => {
         return new TextDecoder("gbk").decode(res);
@@ -420,7 +420,7 @@ ${res}`;
     download = "p.bookdetalis-bookinfo-bookbtnbox.suofang > a";
     static host = ["https://www.hotupub.net/book/*/"];
     static pathMatch = /\/book\/\d+\/$/;
-    static siteName = "ºÓÍ¼Ğ¡Ëµ";
+    static siteName = "æ²³å›¾å°è¯´";
     getArticleContent(parser) {
       const c = parser.querySelector("div.bookread-content-box")?.innerHTML.replaceAll("<br>", `
 `) ?? "";
@@ -435,7 +435,7 @@ ${res}`;
     download = "body > div.container > div.row.row-detail > div > div > div.info > div.top > div > p.opt > a.xs-show.btn-read";
     static host = ["https://www.langrenxiaoshuo.com/html/*/"];
     static pathMatch = /\/html\/\w+\/$/;
-    static siteName = "ÀÇÈËĞ¡Ëµ";
+    static siteName = "ç‹¼äººå°è¯´";
     filters = [".content font", ".content .chapterPages"];
     async pages(url) {
       let html = await this.getArticle(url);
@@ -446,7 +446,7 @@ ${res}`;
       let content = [await this.getArticleContent(p)];
       for (let url2 of subPageUrls) {
         content.push(await this.getContent(url2));
-        console.log("ÒÑ´¦Àí" + url2);
+        console.log("å·²å¤„ç†" + url2);
       }
       return Array.isArray(content) ? content.join(`
 `) : content;
@@ -471,7 +471,7 @@ ${res}`;
     charset = "gbk";
     static host = ["https://www.tianyabooks.com/*/*/"];
     static pathMatch = /\/\w+\/.+\//;
-    static siteName = "ÌìÑÄÊé¿â";
+    static siteName = "å¤©æ¶¯ä¹¦åº“";
   }
 
   // site-download/sites/TianyaWx.ts
@@ -479,7 +479,7 @@ ${res}`;
     contentSelector = "td p";
     static host = ["https://wx.tianyabooks.com/book/*/"];
     static pathMatch = /\/book\/\w+\//;
-    static siteName = "ÌìÑÄÊé¿â-ÎäÏÀĞ¡Ëµ";
+    static siteName = "å¤©æ¶¯ä¹¦åº“-æ­¦ä¾ å°è¯´";
   }
 
   // site-download/sites/Wfxs.ts
@@ -490,7 +490,7 @@ ${res}`;
     sleepTime = 300;
     static host = ["https://m.wfxs.tw/booklist/*"];
     static pathMatch = /\/booklist\/\d+\.html/;
-    static siteName = "Î¢·çĞ¡Ëµ";
+    static siteName = "å¾®é£å°è¯´";
     getArticleContent(parser) {
       const contents = Array.from(parser.querySelectorAll("#read_conent_box>p") ?? []).map((v) => v.textContent);
       return contents.join(`
@@ -502,7 +502,7 @@ ${res}`;
       let p = parser.parseFromString(content, "text/html");
       const content1 = [this.getArticleContent(p)];
       const next = p?.querySelector("body > article > div.page > div > ul > li:nth-child(3) > a");
-      if (next?.textContent === "ÏÂÒ»í“") {
+      if (next?.textContent === "ä¸‹ä¸€é ") {
         content1.push(await this.getContent(next.href));
       }
       return content1.join(`
@@ -526,7 +526,7 @@ ${res}`;
       for (let page of pages) {
         let domStr = await fetch(page.href).then((res) => res.text());
         titles.push(...parseTitle(domStr));
-        this.log(`´¦ÀíÄ¿Â¼${cur++}/${len}`);
+        this.log(`å¤„ç†ç›®å½•${cur++}/${len}`);
       }
       return titles;
     }
@@ -577,7 +577,7 @@ ${res}`;
   // site-download/sites/Diyibanzhume.ts
   class DiyibanzhuMe extends Base {
     static pathmatch = /\/wap.php*/;
-    static siteName = "µÚÒ»°æÖ÷ME";
+    static siteName = "ç¬¬ä¸€ç‰ˆä¸»ME";
     static host = ["https://m.diyibanzhu.me/wap.php"];
     tocPageSelector = 'select[name="pagelist"] option';
     titles = ".container div:nth-of-type(7) .list a";
