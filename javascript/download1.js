@@ -2,7 +2,7 @@
 // ==UserScript==
 // @name         小说下载
 // @namespace    http://tampermonkey.net/
-// @version      2025072010
+// @version      2026010201
 // @description  AK小说, 狼人小说下载, 安装脚本后打开小说目录页面,点击下载
 // @author       bingxl
 // @homepage     https://github.com/bingxl/tampermonkey
@@ -41,10 +41,8 @@
       window.URL.revokeObjectURL(a.href);
     }, 0);
   }
-  function sleep(d) {
-    let now = Date.now();
-    while (Date.now() - now <= d)
-      ;
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
   function gbk2Utf8(buffer) {
     const decode = new TextDecoder("gbk");
@@ -227,6 +225,30 @@
       const c = parser.querySelector(this.contentSelector)?.innerText ?? "";
       return c;
     }
+    async fetchChapter(a) {
+      // 重试计划: 立即重试1次 -> 失败后等1分钟再试2次 -> 仍失败等2分钟再试2次
+      const retryPlan = [0, 0, 60000, 0, 120000, 0];
+      let lastError = null;
+      for (let attempt = 0; attempt < retryPlan.length; attempt++) {
+        const wait = retryPlan[attempt];
+        if (wait > 0) {
+          this.log(`疑似被限流, ${a.textContent} 等待 ${wait / 1000} 秒后重试`);
+          await delay(wait);
+        }
+        try {
+          const res = await this.pages(a.href);
+          if (res && res.trim().length > 0) {
+            return res;
+          }
+          lastError = new Error(`章节内容为空: ${a.href}`);
+        } catch (err) {
+          lastError = err;
+        }
+        console.error(lastError);
+        this.log(`下载失败 (${attempt + 1}/${retryPlan.length}): ${a.textContent}`);
+      }
+      throw lastError;
+    }
     async pages(url) {
       let content = await this.getContent(url);
       return Array.isArray(content) ? content.join(`
@@ -253,31 +275,37 @@
     run = async (e) => {
       e?.preventDefault();
       this.log("执行下载函数");
-      const article = document.querySelector(this.title)?.textContent ?? "";
+      const article = document.querySelector(this.title)?.textContent?.trim() ?? "";
       this.store = new IDB({ dbName: article || "小说名" });
       await this.clear();
       let articleKey = "" + Date.now();
-      this.storeContent(0, articleKey, article);
+      this.storeContent(0, articleKey, `# ${article}
+
+`);
       const titles = await this.getTitles().catch(console.error) ?? [];
       let tasks = new Set;
       let currentTaskNum = 0;
-      for (let i = 0;i < titles.length; i++) {
+      let failedChapters = [];
+      for (let i = 0; i < titles.length; i++) {
         let a = titles[i];
         let key = `${article}${Date.now()}-${i}`;
         if (tasks.size >= this.taskMax) {
           await Promise.any(tasks.values()).catch(console.error);
         }
         let task = new Promise((resolve, reject) => {
-          this.pages(a.href).then(async (res) => {
+          this.fetchChapter(a).then(async (res) => {
             const content = `
-${a.textContent}
-${res}`;
+## ${a.textContent?.trim() ?? ""}
+
+${res}
+`;
             await this.storeContent(i + 1, key, content);
             this.log(`${++currentTaskNum}/${titles.length} ${a.textContent}`);
             this.progressEvent(currentTaskNum / titles.length);
             resolve("");
           }).catch((err) => {
             console.error(err);
+            failedChapters.push(a.textContent ?? a.href);
             reject(err);
           }).finally(() => {
             tasks.delete(task);
@@ -285,10 +313,14 @@ ${res}`;
         });
         tasks.add(task);
         if (this.sleepTime) {
-          sleep(this.sleepTime);
+          await delay(this.sleepTime);
         }
       }
       await Promise.allSettled(tasks.values()).catch(console.error);
+      if (failedChapters.length > 0) {
+        this.log(`以下 ${failedChapters.length} 个章节下载失败: ${failedChapters.join(", ")}`);
+        console.error("下载失败的章节:", failedChapters);
+      }
       await startDownload(article, [...this.keyPath], this.store);
       await this.clear();
       this.store.destroy();
